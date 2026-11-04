@@ -1,0 +1,6 @@
+{
+  "name": "Aesthetiq - Sistema de Agendamento Clínico",
+  "description": "Arquitetura e blueprint de produção para sistema de agendamento de clínica de estética com Supabase, FastAPI e Next.js.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
