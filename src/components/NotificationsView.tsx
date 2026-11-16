@@ -14,14 +14,14 @@ import {
 
 interface NotificationsViewProps {
   notifications: NotificationLog[];
-  onTriggerCronWorker: () => void;
-  isProcessing: boolean;
+  onRefresh: () => void;
+  isRefreshing: boolean;
 }
 
 export function NotificationsView({
   notifications,
-  onTriggerCronWorker,
-  isProcessing
+  onRefresh,
+  isRefreshing
 }: NotificationsViewProps) {
   const queuedCount = notifications.filter((n) => n.status === 'QUEUED').length;
   const sentCount = notifications.filter((n) => n.status === 'SENT' || n.status === 'DELIVERED').length;
@@ -40,19 +40,19 @@ export function NotificationsView({
           <p className="text-xs text-slate-400 max-w-2xl leading-relaxed">
             Envios transacionais automáticos via <strong>Meta Cloud API (WhatsApp Oficial)</strong> com templates pré-homologados (sem risco de banimento) e fallback imediato por e-mail via <strong>Resend</strong>.
           </p>
+          <p className="text-[11px] text-amber-300/90 mt-2 max-w-2xl leading-relaxed">
+            A fila abaixo é gravada no banco a cada agendamento. O envio efetivo ao WhatsApp/e-mail depende de um worker
+            (ex.: Edge Function agendada) conectado ao provedor; enquanto ele não existir, as mensagens permanecem como “na fila”.
+          </p>
         </div>
 
         <button
-          onClick={onTriggerCronWorker}
-          disabled={isProcessing || queuedCount === 0}
-          className={`px-4 py-2.5 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all shadow-md shrink-0 ${
-            queuedCount > 0
-              ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/30'
-              : 'bg-slate-800 text-slate-500 cursor-not-allowed'
-          }`}
+          onClick={onRefresh}
+          disabled={isRefreshing}
+          className="px-4 py-2.5 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all shadow-md shrink-0 bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/30 disabled:opacity-60"
         >
-          <RefreshCw className={`w-3.5 h-3.5 ${isProcessing ? 'animate-spin' : ''}`} />
-          {isProcessing ? 'Disparando Lembretes...' : `Executar Worker Cron (${queuedCount} na fila)`}
+          <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+          {isRefreshing ? 'Atualizando...' : `Atualizar fila (${queuedCount} pendentes)`}
         </button>
       </div>
 

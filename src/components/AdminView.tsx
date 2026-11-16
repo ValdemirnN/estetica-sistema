@@ -4,6 +4,7 @@ import {
   Professional,
   Service,
   ClinicSettings,
+  AnamnesisOverviewItem,
   AnamnesisRecord,
   AppointmentStatus,
   UserProfile
@@ -39,11 +40,12 @@ interface AdminViewProps {
   professionals: Professional[];
   services: Service[];
   settings: ClinicSettings;
-  anamnesisMap: Record<string, AnamnesisRecord>;
+  anamnesisOverview: AnamnesisOverviewItem[]; // lista sem dados de saúde
   onUpdateStatus: (aptId: string, newStatus: AppointmentStatus, note?: string) => void;
   onUpdateProfessional: (prof: Professional) => void;
   onUpdateSettings: (newSettings: ClinicSettings) => void;
-  onRecordAnamnesisAccess: (clientId: string, staffName: string) => void;
+  /** Abre a ficha; o banco registra o acesso na trilha de auditoria (LGPD). */
+  onOpenAnamnesis: (clientId: string) => Promise<AnamnesisRecord | null>;
 }
 
 export function AdminView({
@@ -52,18 +54,18 @@ export function AdminView({
   professionals,
   services,
   settings,
-  anamnesisMap,
+  anamnesisOverview,
   onUpdateStatus,
   onUpdateProfessional,
   onUpdateSettings,
-  onRecordAnamnesisAccess
+  onOpenAnamnesis
 }: AdminViewProps) {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'calendar' | 'professionals' | 'clients' | 'settings'>('dashboard');
   const [selectedProfFilter, setSelectedProfFilter] = useState<string>('ALL');
   const [viewMode, setViewMode] = useState<'daily' | 'weekly'>('daily');
 
   // Estado para visualização de ficha de anamnese
-  const [viewingAnamnesisClientId, setViewingAnamnesisClientId] = useState<string | null>(null);
+  const [viewingAnamnesis, setViewingAnamnesis] = useState<AnamnesisRecord | null>(null);
 
   // Estado para modal de alteração de status
   const [statusModalApt, setStatusModalApt] = useState<Appointment | null>(null);
@@ -94,10 +96,12 @@ export function AdminView({
     }
   };
 
-  const handleOpenAnamnesis = (clientId: string) => {
-    setViewingAnamnesisClientId(clientId);
-    onRecordAnamnesisAccess(clientId, currentUser.fullName);
+  const handleOpenAnamnesis = async (clientId: string) => {
+    const record = await onOpenAnamnesis(clientId);
+    if (record) setViewingAnamnesis(record);
   };
+
+  const isAdmin = currentUser.role === 'ADMIN';
 
   const handleApplyStatusChange = () => {
     if (!statusModalApt) return;
@@ -356,7 +360,7 @@ export function AdminView({
 
                 <div className="pt-2 border-t border-slate-800 flex justify-between items-center text-xs">
                   <span className="text-slate-500">Jornada Seg-Sáb</span>
-                  <button
+                  {isAdmin && <button
                     onClick={() => {
                       const newBuffer = prof.intervalBufferMinutes === 15 ? 20 : 15;
                       onUpdateProfessional({
@@ -367,7 +371,7 @@ export function AdminView({
                     className="text-rose-400 hover:text-rose-300 font-semibold"
                   >
                     Alternar Buffer ({prof.intervalBufferMinutes}m)
-                  </button>
+                  </button>}
                 </div>
               </div>
             ))}
@@ -387,26 +391,26 @@ export function AdminView({
             </p>
 
             <div className="divide-y divide-slate-800">
-              {Object.entries(anamnesisMap).map(([clientId, record]) => {
-                const sampleName = clientId === 'usr-client-1' ? 'Juliana Siqueira Barbosa' : 'Cliente Cadastrado';
-                return (
-                  <div key={record.id} className="py-3 flex items-center justify-between">
-                    <div>
-                      <h4 className="text-sm font-bold text-white">{sampleName}</h4>
-                      <p className="text-xs text-slate-400">
-                        Última atualização: {new Date(record.updatedAt).toLocaleDateString('pt-BR')} • {record.accessLogs.length} acessos registrados
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => handleOpenAnamnesis(clientId)}
-                      className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white flex items-center gap-1.5 transition-colors"
-                    >
-                      <Eye className="w-3.5 h-3.5" />
-                      Abrir Ficha Completa
-                    </button>
+              {anamnesisOverview.length === 0 && (
+                <p className="py-3 text-xs text-slate-500">Nenhuma ficha de anamnese preenchida ainda.</p>
+              )}
+              {anamnesisOverview.map((item) => (
+                <div key={item.clientId} className="py-3 flex items-center justify-between">
+                  <div>
+                    <h4 className="text-sm font-bold text-white">{item.clientName}</h4>
+                    <p className="text-xs text-slate-400">
+                      Última atualização: {new Date(item.updatedAt).toLocaleDateString('pt-BR')} • {item.accessCount} acessos registrados
+                    </p>
                   </div>
-                );
-              })}
+                  <button
+                    onClick={() => handleOpenAnamnesis(item.clientId)}
+                    className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white flex items-center gap-1.5 transition-colors"
+                  >
+                    <Eye className="w-3.5 h-3.5" />
+                    Abrir Ficha Completa
+                  </button>
+                </div>
+              ))}
             </div>
           </div>
         </div>
@@ -477,11 +481,14 @@ export function AdminView({
 
             <div className="pt-3 flex justify-end">
               <button
-                onClick={() => {
-                  onUpdateSettings(formSettings);
-                  alert('Configurações salvas com sucesso!');
-                }}
-                className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-semibold shadow-md shadow-rose-600/30 transition-all"
+                disabled={!isAdmin}
+                title={isAdmin ? undefined : 'Apenas o perfil Admin pode alterar as regras da clínica'}
+                onClick={() => onUpdateSettings(formSettings)}
+                className={`px-5 py-2.5 rounded-xl font-semibold transition-all ${
+                  isAdmin
+                    ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-md shadow-rose-600/30'
+                    : 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                }`}
               >
                 Salvar Regras da Clínica
               </button>
@@ -572,7 +579,7 @@ export function AdminView({
       )}
 
       {/* ================= MODAL: VISUALIZAÇÃO DE ANAMNESE AUDITADA ================= */}
-      {viewingAnamnesisClientId && anamnesisMap[viewingAnamnesisClientId] && (
+      {viewingAnamnesis && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-start justify-between border-b border-slate-800 pb-3">
@@ -582,13 +589,13 @@ export function AdminView({
                 </h3>
                 <p className="text-xs text-slate-400">Acesso registrado em tempo real no log de auditoria</p>
               </div>
-              <button onClick={() => setViewingAnamnesisClientId(null)} className="text-slate-400 hover:text-white">
+              <button onClick={() => setViewingAnamnesis(null)} className="text-slate-400 hover:text-white">
                 ✕
               </button>
             </div>
 
             {(() => {
-              const rec = anamnesisMap[viewingAnamnesisClientId];
+              const rec = viewingAnamnesis;
               return (
                 <div className="space-y-3 text-xs">
                   <div className="bg-slate-950 p-3 rounded-xl border border-slate-800">
@@ -639,7 +646,7 @@ export function AdminView({
 
             <div className="pt-2 flex justify-end">
               <button
-                onClick={() => setViewingAnamnesisClientId(null)}
+                onClick={() => setViewingAnamnesis(null)}
                 className="px-4 py-2 rounded-xl bg-slate-800 text-xs font-semibold text-white"
               >
                 Fechar Ficha

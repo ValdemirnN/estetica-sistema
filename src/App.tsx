@@ -1,281 +1,304 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import type { Session } from '@supabase/supabase-js';
+import { isSupabaseConfigured, supabase } from './lib/supabase';
 import {
-  INITIAL_CATEGORIES,
-  INITIAL_SERVICES,
-  INITIAL_PROFESSIONALS,
-  INITIAL_APPOINTMENTS,
-  INITIAL_CLIENT,
-  INITIAL_STAFF_USERS,
-  INITIAL_ANAMNESIS,
-  INITIAL_NOTIFICATIONS,
-  INITIAL_SETTINGS
-} from './mock/initialData';
+  ApiError,
+  Catalog,
+  bookAppointment,
+  cancelMyAppointment,
+  emptyAnamnesis,
+  fetchAnamnesisOverview,
+  fetchAppointments,
+  fetchBusyBlocks,
+  fetchCatalog,
+  fetchClinicName,
+  fetchMyAnamnesis,
+  fetchNotifications,
+  fetchProfile,
+  openAnamnesisAsStaff,
+  saveMyAnamnesis,
+  signOut,
+  updateAppointmentStatus,
+  updateProfessional,
+  updateSettings,
+  BookingInput
+} from './services/api';
 import {
   Appointment,
-  Professional,
-  Service,
-  ClinicSettings,
+  AnamnesisOverviewItem,
   AnamnesisRecord,
   AppointmentStatus,
+  BusyBlock,
+  ClinicSettings,
+  NotificationLog,
+  Professional,
   UserProfile,
-  NotificationLog
+  UserRole
 } from './types/clinic';
 import { ClientView } from './components/ClientView';
 import { AdminView } from './components/AdminView';
 import { NotificationsView } from './components/NotificationsView';
 import { ConcurrencySimulator } from './components/ConcurrencySimulator';
+import { AuthScreen } from './components/AuthScreen';
 import { FULL_SQL_SCHEMA } from './mock/sqlSchema';
 import {
   Sparkles,
   Calendar,
-  Users,
   Bell,
   Database,
-  Layers,
   Zap,
   CheckCircle2,
+  AlertTriangle,
+  Loader2,
+  LogOut,
   Copy,
   Check,
-  Smartphone,
-  Shield,
-  Clock,
-  ArrowRight
+  Smartphone
 } from 'lucide-react';
 
+const ROLE_LABEL: Record<UserRole, string> = {
+  CLIENT: 'Cliente',
+  PROFESSIONAL: 'Corpo Clínico',
+  RECEPTIONIST: 'Recepção',
+  ADMIN: 'Gestão / Admin'
+};
+
+type MainTab = 'client-app' | 'admin-panel' | 'notifications' | 'concurrency' | 'blueprint';
+
+/** Tela mostrada quando as variáveis do Supabase não foram configuradas. */
+function MissingConfig() {
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-6 font-sans">
+      <div className="max-w-lg bg-slate-900 border border-amber-500/40 rounded-2xl p-6 space-y-3">
+        <h1 className="text-base font-bold text-white flex items-center gap-2">
+          <AlertTriangle className="w-5 h-5 text-amber-400" /> Supabase não configurado
+        </h1>
+        <p className="text-xs text-slate-300 leading-relaxed">
+          Crie um arquivo <code className="text-rose-300">.env</code> na raiz do projeto (veja{' '}
+          <code className="text-rose-300">.env.example</code>) com a URL e a chave <strong>anon</strong> do seu projeto
+          (Supabase → Project Settings → API) e reinicie o servidor:
+        </p>
+        <pre className="bg-slate-950 border border-slate-800 rounded-lg p-3 text-[11px] text-slate-300 overflow-x-auto">{`VITE_SUPABASE_URL=https://xxxx.supabase.co
+VITE_SUPABASE_ANON_KEY=eyJ...`}</pre>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
-  // Estado dos Dados
-  const [appointments, setAppointments] = useState<Appointment[]>(() => {
-    const saved = localStorage.getItem('aesthetiq_appointments');
-    return saved ? JSON.parse(saved) : INITIAL_APPOINTMENTS;
-  });
+  if (!isSupabaseConfigured) return <MissingConfig />;
+  return <AuthGate />;
+}
 
-  const [professionals, setProfessionals] = useState<Professional[]>(() => {
-    const saved = localStorage.getItem('aesthetiq_professionals');
-    return saved ? JSON.parse(saved) : INITIAL_PROFESSIONALS;
-  });
+/** Decide entre tela de login e o sistema, conforme a sessão do Supabase Auth. */
+function AuthGate() {
+  const [session, setSession] = useState<Session | null | undefined>(undefined); // undefined = carregando
+  const [clinicName, setClinicName] = useState<string | null>(null);
 
-  const [settings, setSettings] = useState<ClinicSettings>(() => {
-    const saved = localStorage.getItem('aesthetiq_settings');
-    return saved ? JSON.parse(saved) : INITIAL_SETTINGS;
-  });
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    const {
+      data: { subscription }
+    } = supabase.auth.onAuthStateChange((_event, s) => setSession(s));
+    return () => subscription.unsubscribe();
+  }, []);
 
-  const [notifications, setNotifications] = useState<NotificationLog[]>(() => {
-    const saved = localStorage.getItem('aesthetiq_notifications');
-    return saved ? JSON.parse(saved) : INITIAL_NOTIFICATIONS;
-  });
+  useEffect(() => {
+    if (session === null) fetchClinicName().then(setClinicName).catch(() => {});
+  }, [session]);
 
-  const [anamnesisMap, setAnamnesisMap] = useState<Record<string, AnamnesisRecord>>(() => {
-    return {
-      'usr-client-1': INITIAL_ANAMNESIS
-    };
-  });
+  if (session === undefined) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">
+        <Loader2 className="w-6 h-6 animate-spin" />
+      </div>
+    );
+  }
+  if (session === null) return <AuthScreen clinicName={clinicName} />;
+  // key = id do usuário: trocar de conta remonta o sistema e descarta dados da conta anterior.
+  return <ClinicApp key={session.user.id} userId={session.user.id} />;
+}
 
-  // Usuário Atual Logado
-  const allUsers: UserProfile[] = [
-    INITIAL_CLIENT,
-    {
-      id: 'usr-prof-1',
-      role: 'PROFESSIONAL',
-      fullName: 'Dra. Camila Vasconcellos',
-      email: 'camila@aesthetiq.com.br',
-      phone: '+551199444-5566',
-      optInWhatsapp: true,
-      optInEmail: true,
-      lgpdConsentAt: '2025-10-01T00:00:00Z',
-      termsVersion: 'v1.0'
-    },
-    ...INITIAL_STAFF_USERS
-  ];
+function ClinicApp({ userId }: { userId: string }) {
+  // ---- Dados (todos vêm do Supabase) ----
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
+  const [catalog, setCatalog] = useState<Catalog | null>(null);
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [busyBlocks, setBusyBlocks] = useState<BusyBlock[]>([]);
+  const [notifications, setNotifications] = useState<NotificationLog[]>([]);
+  const [myAnamnesis, setMyAnamnesis] = useState<AnamnesisRecord>(() => emptyAnamnesis(userId));
+  const [anamnesisOverview, setAnamnesisOverview] = useState<AnamnesisOverviewItem[]>([]);
 
-  const [currentUserId, setCurrentUserId] = useState<string>('usr-client-1');
-  const currentUser = allUsers.find((u) => u.id === currentUserId) || INITIAL_CLIENT;
-
-  // Navegação Principal da Aplicação
-  const [mainTab, setMainTab] = useState<'client-app' | 'admin-panel' | 'notifications' | 'concurrency' | 'blueprint'>('client-app');
-
-  // Estado para worker cron em execução
-  const [isProcessingCron, setIsProcessingCron] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [mainTab, setMainTab] = useState<MainTab>('client-app');
+  const [isRefreshingNotifs, setIsRefreshingNotifs] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [copiedSql, setCopiedSql] = useState(false);
+  const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  // Persistência automática
-  useEffect(() => {
-    localStorage.setItem('aesthetiq_appointments', JSON.stringify(appointments));
-  }, [appointments]);
-
-  useEffect(() => {
-    localStorage.setItem('aesthetiq_professionals', JSON.stringify(professionals));
-  }, [professionals]);
-
-  useEffect(() => {
-    localStorage.setItem('aesthetiq_settings', JSON.stringify(settings));
-  }, [settings]);
-
-  useEffect(() => {
-    localStorage.setItem('aesthetiq_notifications', JSON.stringify(notifications));
-  }, [notifications]);
+  const isStaff = !!currentUser && currentUser.role !== 'CLIENT';
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3500);
+    clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToastMessage(null), 4000);
+  };
+  const errMsg = (e: unknown) => (e instanceof Error ? e.message : 'Algo deu errado. Tente novamente.');
+
+  // ---- Carga inicial ----
+  const loadAll = useCallback(async () => {
+    setLoadError(null);
+    try {
+      const profile = await fetchProfile(userId);
+      const staff = profile.role !== 'CLIENT';
+      const [cat, appts, busy, notifs, anam] = await Promise.all([
+        fetchCatalog(),
+        fetchAppointments(),
+        fetchBusyBlocks(),
+        fetchNotifications(),
+        staff ? fetchAnamnesisOverview() : fetchMyAnamnesis(userId)
+      ]);
+      setCurrentUser(profile);
+      setCatalog(cat);
+      setAppointments(appts);
+      setBusyBlocks(busy);
+      setNotifications(notifs);
+      if (staff) setAnamnesisOverview(anam as AnamnesisOverviewItem[]);
+      else setMyAnamnesis(anam as AnamnesisRecord);
+      setMainTab((prev) => (staff && prev === 'client-app' ? 'admin-panel' : prev));
+    } catch (e) {
+      setLoadError(errMsg(e));
+    }
+  }, [userId]);
+
+  useEffect(() => {
+    loadAll();
+  }, [loadAll]);
+
+  // Ao voltar para a aba do navegador, atualiza agenda e horários ocupados
+  // (outros clientes podem ter agendado enquanto isso).
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && currentUser) refreshAgenda().catch(() => {});
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  });
+
+  const refreshAgenda = async () => {
+    const [appts, busy, notifs] = await Promise.all([fetchAppointments(), fetchBusyBlocks(), fetchNotifications()]);
+    setAppointments(appts);
+    setBusyBlocks(busy);
+    setNotifications(notifs);
   };
 
-  // 1. Criar novo Agendamento (Com confirmação imediata e fila WhatsApp/Email)
-  const handleBookAppointment = (aptData: Partial<Appointment>) => {
-    const newId = `apt-${Date.now().toString().slice(-6)}`;
-    const newAppointment: Appointment = {
-      id: newId,
-      clientId: aptData.clientId || currentUser.id,
-      clientName: aptData.clientName || currentUser.fullName,
-      clientPhone: aptData.clientPhone || currentUser.phone,
-      clientEmail: aptData.clientEmail || currentUser.email,
-      professionalId: aptData.professionalId!,
-      serviceId: aptData.serviceId!,
-      startTime: aptData.startTime!,
-      endTime: aptData.endTime!,
-      bufferEndTime: aptData.bufferEndTime!,
-      status: 'CONFIRMED',
-      totalPriceCents: aptData.totalPriceCents || 0,
-      clientNotes: aptData.clientNotes,
-      statusHistory: [
-        {
-          status: 'CONFIRMED',
-          changedAt: new Date().toISOString(),
-          changedBy: `${currentUser.fullName} (${currentUser.role})`,
-          note: 'Agendamento confirmado online via aplicação.'
-        }
-      ],
-      createdAt: new Date().toISOString()
-    };
-
-    setAppointments((prev) => [newAppointment, ...prev]);
-
-    // Enviar notificação imediata de confirmação (WhatsApp Oficial)
-    const newNotifImmediate: NotificationLog = {
-      id: `notif-${Date.now()}-1`,
-      appointmentId: newId,
-      recipientName: newAppointment.clientName,
-      recipientAddress: newAppointment.clientPhone,
-      channel: 'WHATSAPP',
-      status: 'DELIVERED',
-      templateName: 'appointment_confirmed_instant',
-      scheduledFor: new Date().toISOString(),
-      sentAt: new Date().toISOString(),
-      payload: {
-        procedimento: INITIAL_SERVICES.find((s) => s.id === newAppointment.serviceId)?.name,
-        horario: newAppointment.startTime
-      }
-    };
-
-    // Agendar lembrete automático para 24h antes
-    const newNotifReminder: NotificationLog = {
-      id: `notif-${Date.now()}-2`,
-      appointmentId: newId,
-      recipientName: newAppointment.clientName,
-      recipientAddress: newAppointment.clientPhone,
-      channel: 'WHATSAPP',
-      status: 'QUEUED',
-      templateName: 'appointment_reminder_24h',
-      scheduledFor: new Date(new Date(newAppointment.startTime).getTime() - 24 * 3600000).toISOString(),
-      payload: {
-        procedimento: INITIAL_SERVICES.find((s) => s.id === newAppointment.serviceId)?.name
-      }
-    };
-
-    setNotifications((prev) => [newNotifImmediate, newNotifReminder, ...prev]);
-    showToast('Agendamento confirmado! Mensagem no WhatsApp enviada.');
+  const handleSignOut = async () => {
+    await signOut(); // AuthGate volta para o login
   };
 
-  // 2. Cancelar Agendamento
-  const handleCancelAppointment = (aptId: string, reason: string) => {
-    setAppointments((prev) =>
-      prev.map((apt) => {
-        if (apt.id !== aptId) return apt;
-        return {
-          ...apt,
-          status: 'CANCELLED' as AppointmentStatus,
-          cancellationReason: reason,
-          cancelledAt: new Date().toISOString(),
-          cancelledBy: currentUser.id,
-          statusHistory: [
-            ...apt.statusHistory,
-            {
-              status: 'CANCELLED' as AppointmentStatus,
-              changedAt: new Date().toISOString(),
-              changedBy: currentUser.fullName,
-              note: reason || 'Cancelado pelo cliente respeitando antecedência mínima.'
-            }
-          ]
-        };
-      })
+  if (loadError) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-6 font-sans">
+        <div className="max-w-lg bg-slate-900 border border-rose-500/40 rounded-2xl p-6 space-y-3">
+          <h1 className="text-base font-bold text-white flex items-center gap-2">
+            <AlertTriangle className="w-5 h-5 text-rose-400" /> Não foi possível carregar os dados
+          </h1>
+          <p className="text-xs text-slate-300 leading-relaxed">{loadError}</p>
+          <div className="flex gap-2">
+            <button onClick={loadAll} className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-xs font-semibold text-white">
+              Tentar novamente
+            </button>
+            <button onClick={handleSignOut} className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white">
+              Sair
+            </button>
+          </div>
+        </div>
+      </div>
     );
-    showToast('Agendamento cancelado com sucesso.');
-  };
+  }
 
-  // 3. Atualizar Status com Auditoria
-  const handleUpdateStatus = (aptId: string, newStatus: AppointmentStatus, note?: string) => {
-    setAppointments((prev) =>
-      prev.map((apt) => {
-        if (apt.id !== aptId) return apt;
-        return {
-          ...apt,
-          status: newStatus,
-          statusHistory: [
-            ...apt.statusHistory,
-            {
-              status: newStatus,
-              changedAt: new Date().toISOString(),
-              changedBy: `${currentUser.fullName} (${currentUser.role})`,
-              note: note || undefined
-            }
-          ]
-        };
-      })
+  if (!currentUser || !catalog) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">
+        <Loader2 className="w-6 h-6 animate-spin" />
+      </div>
     );
-    showToast(`Status atualizado para ${newStatus}.`);
+  }
+
+  const { categories, services, leaves, settings } = catalog;
+  const professionals = catalog.professionals;
+
+  // ---- Ações ----
+
+  // 1. Agendar. A validação (jornada, ausências, preço, conflito) é feita no banco.
+  const handleBookAppointment = async (input: BookingInput): Promise<string | null> => {
+    try {
+      const id = await bookAppointment(input);
+      await refreshAgenda();
+      showToast('Agendamento confirmado! Os lembretes entraram na fila de notificações.');
+      return id;
+    } catch (e) {
+      // 23P01 = outro cliente pegou o horário no mesmo instante: atualiza a grade.
+      if (e instanceof ApiError && e.code === '23P01') await refreshAgenda().catch(() => {});
+      showToast(errMsg(e));
+      return null;
+    }
   };
 
-  // 4. Atualizar Anamnese
-  const handleUpdateAnamnesis = (updated: Partial<AnamnesisRecord>) => {
-    setAnamnesisMap((prev) => ({
-      ...prev,
-      [currentUser.id]: {
-        ...(prev[currentUser.id] || INITIAL_ANAMNESIS),
-        ...updated,
-        updatedAt: new Date().toISOString()
-      }
-    }));
+  // 2. Cancelar (a antecedência mínima é conferida no banco)
+  const handleCancelAppointment = async (aptId: string, reason: string): Promise<boolean> => {
+    try {
+      await cancelMyAppointment(aptId, reason);
+      await refreshAgenda();
+      showToast('Agendamento cancelado com sucesso.');
+      return true;
+    } catch (e) {
+      showToast(errMsg(e));
+      return false;
+    }
   };
 
-  // 5. Registrar Acesso LGPD à Anamnese
-  const handleRecordAnamnesisAccess = (clientId: string, staffName: string) => {
-    setAnamnesisMap((prev) => {
-      const record = prev[clientId] || INITIAL_ANAMNESIS;
-      return {
-        ...prev,
-        [clientId]: {
-          ...record,
-          accessLogs: [
-            {
-              id: `log-${Date.now()}`,
-              accessedBy: currentUser.id,
-              accessedByName: staffName,
-              accessedAt: new Date().toISOString(),
-              action: 'VIEW'
-            },
-            ...record.accessLogs
-          ]
-        }
-      };
-    });
+  // 3. Status (equipe). O histórico de auditoria é gravado por trigger.
+  const handleUpdateStatus = async (aptId: string, newStatus: AppointmentStatus, note?: string) => {
+    try {
+      await updateAppointmentStatus(aptId, newStatus, note);
+      await refreshAgenda();
+      showToast(`Status atualizado para ${newStatus}.`);
+    } catch (e) {
+      showToast(errMsg(e));
+    }
   };
 
-  // 6. Exportação de Dados LGPD
+  // 4. Anamnese do próprio cliente
+  const handleUpdateAnamnesis = async (updated: Partial<AnamnesisRecord>): Promise<boolean> => {
+    try {
+      const saved = await saveMyAnamnesis(currentUser.id, { ...myAnamnesis, ...updated, signatureConsent: true });
+      setMyAnamnesis(saved);
+      return true;
+    } catch (e) {
+      showToast(errMsg(e));
+      return false;
+    }
+  };
+
+  // 5. Equipe abre a ficha: o banco registra o acesso (LGPD) e devolve a ficha com a trilha
+  const handleOpenAnamnesis = async (clientId: string): Promise<AnamnesisRecord | null> => {
+    try {
+      const rec = await openAnamnesisAsStaff(clientId);
+      setAnamnesisOverview(await fetchAnamnesisOverview());
+      return rec;
+    } catch (e) {
+      showToast(errMsg(e));
+      return null;
+    }
+  };
+
+  // 6. Exportação de dados (LGPD, art. 18)
   const handleExportData = () => {
     const data = {
       perfil: currentUser,
       agendamentos: appointments.filter((a) => a.clientId === currentUser.id),
-      anamnese: anamnesisMap[currentUser.id] || INITIAL_ANAMNESIS,
+      anamnese: myAnamnesis,
       dataExportacao: new Date().toISOString(),
       avisoLegal: 'Exportação em conformidade com o Artigo 18 da LGPD (Portabilidade de Dados Pessoais).'
     };
@@ -285,28 +308,41 @@ export default function App() {
     a.href = url;
     a.download = `aesthetiq_meus_dados_${currentUser.id}.json`;
     a.click();
+    URL.revokeObjectURL(url);
     showToast('Dados exportados em JSON conforme a LGPD.');
   };
 
-  // 7. Disparar Worker Cron de Lembretes
-  const handleTriggerCron = () => {
-    setIsProcessingCron(true);
-    setTimeout(() => {
-      setNotifications((prev) =>
-        prev.map((n) => {
-          if (n.status === 'QUEUED') {
-            return {
-              ...n,
-              status: 'DELIVERED',
-              sentAt: new Date().toISOString()
-            };
-          }
-          return n;
-        })
-      );
-      setIsProcessingCron(false);
-      showToast('Worker executado! Todas as notificações pendentes foram enviadas.');
-    }, 1000);
+  // 7. Admin: profissional e configurações
+  const handleUpdateProfessional = async (updated: Professional) => {
+    try {
+      await updateProfessional(updated);
+      setCatalog(await fetchCatalog());
+      showToast('Profissional atualizada com sucesso!');
+    } catch (e) {
+      showToast(errMsg(e));
+    }
+  };
+
+  const handleUpdateSettings = async (newSettings: ClinicSettings) => {
+    try {
+      await updateSettings(newSettings);
+      setCatalog(await fetchCatalog());
+      showToast('Configurações da clínica salvas!');
+    } catch (e) {
+      showToast(errMsg(e));
+    }
+  };
+
+  // 8. Notificações: a fila está no banco; aqui só recarregamos o que há nela.
+  const handleRefreshNotifications = async () => {
+    setIsRefreshingNotifs(true);
+    try {
+      setNotifications(await fetchNotifications());
+    } catch (e) {
+      showToast(errMsg(e));
+    } finally {
+      setIsRefreshingNotifs(false);
+    }
   };
 
   const copySqlCode = () => {
@@ -340,28 +376,20 @@ export default function App() {
             </div>
           </div>
 
-          {/* Switcher de Perfis de Usuário para Testes Rápidos */}
-          <div className="flex items-center gap-2 bg-slate-950 p-1 rounded-xl border border-slate-800">
-            <span className="text-[11px] text-slate-400 pl-2 hidden md:block">Simular como:</span>
-            <select
-              value={currentUserId}
-              onChange={(e) => {
-                const uid = e.target.value;
-                setCurrentUserId(uid);
-                const u = allUsers.find((x) => x.id === uid);
-                if (u?.role === 'CLIENT') {
-                  setMainTab('client-app');
-                } else {
-                  setMainTab('admin-panel');
-                }
-              }}
-              className="bg-slate-900 text-xs text-white border-0 rounded-lg px-2.5 py-1.5 focus:ring-1 focus:ring-rose-500 font-medium cursor-pointer"
+          {/* Usuário logado */}
+          <div className="flex items-center gap-3 bg-slate-950 pl-3 pr-1 py-1 rounded-xl border border-slate-800">
+            <div className="text-right leading-tight">
+              <div className="text-xs text-white font-semibold">{currentUser.fullName}</div>
+              <div className="text-[10px] text-slate-400">{ROLE_LABEL[currentUser.role]}</div>
+            </div>
+            <button
+              onClick={handleSignOut}
+              title="Sair"
+              className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-xs text-slate-300 hover:text-white flex items-center gap-1.5 transition-colors"
             >
-              <option value="usr-client-1">👤 Juliana (Cliente)</option>
-              <option value="usr-prof-1">👩‍⚕️ Dra. Camila (Biomédica)</option>
-              <option value="usr-recep-1">📋 Mariana (Recepção)</option>
-              <option value="usr-admin-1">⚙️ Renata (Gestora/Admin)</option>
-            </select>
+              <LogOut className="w-3.5 h-3.5" />
+              Sair
+            </button>
           </div>
         </div>
       </header>
@@ -370,7 +398,8 @@ export default function App() {
       <div className="bg-slate-900 border-b border-slate-800 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 flex items-center justify-between overflow-x-auto gap-2">
           <div className="flex items-center gap-1 py-2 text-xs">
-            <button
+            {!isStaff && (
+<button
               onClick={() => setMainTab('client-app')}
               className={`px-3.5 py-2 rounded-xl font-semibold transition-all flex items-center gap-2 ${
                 mainTab === 'client-app'
@@ -381,8 +410,10 @@ export default function App() {
               <Smartphone className="w-4 h-4" />
               App do Cliente (Mobile-First)
             </button>
+            )}
 
-            <button
+            {isStaff && (
+<button
               onClick={() => setMainTab('admin-panel')}
               className={`px-3.5 py-2 rounded-xl font-semibold transition-all flex items-center gap-2 ${
                 mainTab === 'admin-panel'
@@ -393,6 +424,7 @@ export default function App() {
               <Calendar className="w-4 h-4" />
               Painel Administrativo
             </button>
+            )}
 
             <button
               onClick={() => setMainTab('notifications')}
@@ -409,7 +441,8 @@ export default function App() {
               )}
             </button>
 
-            <button
+            {currentUser.role === 'ADMIN' && (
+<button
               onClick={() => setMainTab('concurrency')}
               className={`px-3.5 py-2 rounded-xl font-semibold transition-all flex items-center gap-2 ${
                 mainTab === 'concurrency'
@@ -420,8 +453,10 @@ export default function App() {
               <Zap className="w-4 h-4" />
               Teste Concorrência (btree_gist)
             </button>
+            )}
 
-            <button
+            {currentUser.role === 'ADMIN' && (
+<button
               onClick={() => setMainTab('blueprint')}
               className={`px-3.5 py-2 rounded-xl font-semibold transition-all flex items-center gap-2 ${
                 mainTab === 'blueprint'
@@ -432,20 +467,23 @@ export default function App() {
               <Database className="w-4 h-4" />
               Schema & SQL Produção
             </button>
+            )}
           </div>
         </div>
       </div>
 
       {/* Main View Area */}
       <main className="flex-1 max-w-7xl mx-auto px-4 py-6 w-full">
-        {mainTab === 'client-app' && (
+        {mainTab === 'client-app' && !isStaff && (
           <ClientView
             currentUser={currentUser}
-            categories={INITIAL_CATEGORIES}
-            services={INITIAL_SERVICES}
+            categories={categories}
+            services={services}
             professionals={professionals}
             appointments={appointments}
-            anamnesis={anamnesisMap[currentUser.id] || INITIAL_ANAMNESIS}
+            busyBlocks={busyBlocks}
+            leaves={leaves}
+            anamnesis={myAnamnesis}
             settings={settings}
             onBookAppointment={handleBookAppointment}
             onCancelAppointment={handleCancelAppointment}
@@ -454,40 +492,32 @@ export default function App() {
           />
         )}
 
-        {mainTab === 'admin-panel' && (
+        {mainTab === 'admin-panel' && isStaff && (
           <AdminView
             currentUser={currentUser}
             appointments={appointments}
             professionals={professionals}
-            services={INITIAL_SERVICES}
+            services={services}
             settings={settings}
-            anamnesisMap={anamnesisMap}
+            anamnesisOverview={anamnesisOverview}
             onUpdateStatus={handleUpdateStatus}
-            onUpdateProfessional={(updatedProf) => {
-              setProfessionals((prev) =>
-                prev.map((p) => (p.id === updatedProf.id ? updatedProf : p))
-              );
-              showToast('Profissional atualizada com sucesso!');
-            }}
-            onUpdateSettings={(newSettings) => {
-              setSettings(newSettings);
-              showToast('Configurações da clínica salvas!');
-            }}
-            onRecordAnamnesisAccess={handleRecordAnamnesisAccess}
+            onUpdateProfessional={handleUpdateProfessional}
+            onUpdateSettings={handleUpdateSettings}
+            onOpenAnamnesis={handleOpenAnamnesis}
           />
         )}
 
         {mainTab === 'notifications' && (
           <NotificationsView
             notifications={notifications}
-            onTriggerCronWorker={handleTriggerCron}
-            isProcessing={isProcessingCron}
+            onRefresh={handleRefreshNotifications}
+            isRefreshing={isRefreshingNotifs}
           />
         )}
 
-        {mainTab === 'concurrency' && <ConcurrencySimulator />}
+        {mainTab === 'concurrency' && currentUser.role === 'ADMIN' && <ConcurrencySimulator />}
 
-        {mainTab === 'blueprint' && (
+        {mainTab === 'blueprint' && currentUser.role === 'ADMIN' && (
           <div className="space-y-6">
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
               <div>

@@ -164,7 +164,7 @@ CREATE TABLE IF NOT EXISTS public.appointments (
     -- TRAVA DEFINITIVA NO NÍVEL DO BANCO:
     CONSTRAINT prevent_professional_double_booking EXCLUDE USING gist (
         professional_id WITH =,
-        tsrange(start_time, buffer_end_time, '[)') WITH &&
+        tstzrange(start_time, buffer_end_time, '[)') WITH &&
     ) WHERE (status IN ('PENDING', 'CONFIRMED'))
 );
 
@@ -231,8 +231,8 @@ CREATE INDEX IF NOT EXISTS idx_working_hours_prof
 
 CREATE INDEX IF NOT EXISTS idx_leaves_prof_interval 
     ON public.professional_leaves USING gist (
-        professional_id WITH =,
-        tsrange(start_datetime, end_datetime, '[)') WITH &&
+        professional_id,
+        tstzrange(start_datetime, end_datetime, '[)')
     );
 
 CREATE INDEX IF NOT EXISTS idx_notifications_pending 
@@ -415,9 +415,9 @@ ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO public.services (id, category_id, name, slug, description, duration_minutes, price_cents, requires_anamnesis)
 VALUES
-    ('s1111111-1111-1111-1111-111111111111', 'c1111111-1111-1111-1111-111111111111', 'Limpeza de Pele Profunda com Peeling', 'limpeza-de-pele-profunda', 'Extração profunda com vapor de ozônio e máscara hidroplástica calmante.', 75, 22000, TRUE),
-    ('s2222222-2222-2222-2222-222222222222', 'c2222222-2222-2222-2222-222222222222', 'Toxina Botulínica (Botox) Full Face', 'botox-full-face', 'Suavização de rugas dinâmicas na testa, glabela e pés de galinha.', 45, 145000, TRUE),
-    ('s3333333-3333-3333-3333-333333333333', 'c2222222-2222-2222-2222-222222222222', 'Preenchimento Labial HidraGloss', 'preenchimento-labial', 'Ácido hialurônico para volume e contorno labial natural.', 60, 125000, TRUE),
-    ('s4444444-4444-4444-4444-444444444444', 'c3333333-3333-3333-3333-333333333333', 'Drenagem Linfática Facial Descongestionante', 'drenagem-facial', 'Redução de inchaço e ativação da circulação.', 40, 16000, FALSE),
-    ('s5555555-5555-5555-5555-555555555555', 'c4444444-4444-4444-4444-444444444444', 'Depilação a Laser Soprano Titanium (Virilha + Axilas)', 'laser-soprano', 'Depilação indolor com resfriamento térmico de safira.', 30, 28000, TRUE)
+    ('a1111111-1111-1111-1111-111111111111', 'c1111111-1111-1111-1111-111111111111', 'Limpeza de Pele Profunda com Peeling', 'limpeza-de-pele-profunda', 'Extração profunda com vapor de ozônio e máscara hidroplástica calmante.', 75, 22000, TRUE),
+    ('a2222222-2222-2222-2222-222222222222', 'c2222222-2222-2222-2222-222222222222', 'Toxina Botulínica (Botox) Full Face', 'botox-full-face', 'Suavização de rugas dinâmicas na testa, glabela e pés de galinha.', 45, 145000, TRUE),
+    ('a3333333-3333-3333-3333-333333333333', 'c2222222-2222-2222-2222-222222222222', 'Preenchimento Labial HidraGloss', 'preenchimento-labial', 'Ácido hialurônico para volume e contorno labial natural.', 60, 125000, TRUE),
+    ('a4444444-4444-4444-4444-444444444444', 'c3333333-3333-3333-3333-333333333333', 'Drenagem Linfática Facial Descongestionante', 'drenagem-facial', 'Redução de inchaço e ativação da circulação.', 40, 16000, FALSE),
+    ('a5555555-5555-5555-5555-555555555555', 'c4444444-4444-4444-4444-444444444444', 'Depilação a Laser Soprano Titanium (Virilha + Axilas)', 'laser-soprano', 'Depilação indolor com resfriamento térmico de safira.', 30, 28000, TRUE)
 ON CONFLICT (id) DO NOTHING;

@@ -6,7 +6,7 @@ export type DayOfWeek = 0 | 1 | 2 | 3 | 4 | 5 | 6; // 0=Sunday, 1=Monday...
 
 export type NotificationChannel = 'WHATSAPP' | 'EMAIL';
 
-export type NotificationStatus = 'QUEUED' | 'SENT' | 'FAILED' | 'DELIVERED';
+export type NotificationStatus = 'QUEUED' | 'SENT' | 'FAILED' | 'DELIVERED' | 'READ';
 
 export interface UserProfile {
   id: string;
@@ -152,4 +152,20 @@ export interface ClinicSettings {
   defaultBufferMinutes: number; // Intervalo de higienização padrão
   autoAssignStrategy: 'ROUND_ROBIN' | 'LEAST_BUSY';
   workingDays: number[];
+}
+
+/** Janela ocupada de um profissional (sem dados pessoais), usada para calcular horários livres. */
+export interface BusyBlock {
+  professionalId: string;
+  startTime: string;     // ISO UTC
+  bufferEndTime: string; // ISO UTC
+  status: AppointmentStatus;
+}
+
+/** Item da lista de prontuários da equipe (sem dados de saúde). */
+export interface AnamnesisOverviewItem {
+  clientId: string;
+  clientName: string;
+  updatedAt: string;
+  accessCount: number;
 }

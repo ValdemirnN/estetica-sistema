@@ -2,6 +2,7 @@ import {
   Professional,
   Service,
   Appointment,
+  BusyBlock,
   Leave,
   DayOfWeek
 } from '../types/clinic';
@@ -76,7 +77,7 @@ export function calculateAvailableSlots(params: {
   service: Service;
   dateStr: string; // 'YYYY-MM-DD'
   professionals: Professional[];
-  appointments: Appointment[];
+  appointments: BusyBlock[]; // horários ocupados (de TODOS os clientes, sem dados pessoais)
   leaves?: Leave[];
   customBufferMinutes?: number;
 }): TimeSlot[] {
@@ -201,60 +202,6 @@ export function calculateAvailableSlots(params: {
 
   // Retornar lista ordenada por horário cronológico
   return Array.from(allSlotsMap.values()).sort((a, b) => a.startIso.localeCompare(b.startIso));
-}
-
-/**
- * Algoritmo do "Primeiro Disponível" com distribuição justa (Least Busy / Round-Robin)
- */
-export function assignFairProfessional(params: {
-  serviceId: string;
-  slotStartIso: string;
-  slotBufferEndIso: string;
-  professionals: Professional[];
-  appointments: Appointment[];
-}): Professional | null {
-  const { serviceId, slotStartIso, slotBufferEndIso, professionals, appointments } = params;
-
-  const slotStart = new Date(slotStartIso);
-  const slotBufferEnd = new Date(slotBufferEndIso);
-
-  // Profissionais que fazem o serviço e participam do auto-assign
-  const candidates = professionals.filter(
-    (p) => p.isAvailableForAutoAssign && p.specialtyServiceIds.includes(serviceId)
-  );
-
-  // Filtrar quem REALMENTE está livre no slot
-  const availableCandidates = candidates.filter((prof) => {
-    const hasConflict = appointments.some((apt) => {
-      if (apt.professionalId !== prof.id) return false;
-      if (apt.status !== 'CONFIRMED' && apt.status !== 'PENDING') return false;
-      const aptStart = new Date(apt.startTime);
-      const aptBufferEnd = new Date(apt.bufferEndTime);
-      return intervalsOverlap(slotStart, slotBufferEnd, aptStart, aptBufferEnd);
-    });
-    return !hasConflict;
-  });
-
-  if (availableCandidates.length === 0) return null;
-
-  // Critério de justiça: escolher o profissional com menor número de atendimentos ativos nesta semana
-  const now = new Date();
-  const weekStart = new Date(now);
-  weekStart.setDate(now.getDate() - now.getDay());
-
-  const workloads = availableCandidates.map((prof) => {
-    const count = appointments.filter(
-      (a) =>
-        a.professionalId === prof.id &&
-        new Date(a.startTime) >= weekStart &&
-        (a.status === 'CONFIRMED' || a.status === 'COMPLETED')
-    ).length;
-    return { prof, count };
-  });
-
-  // Ordenar por menor carga
-  workloads.sort((a, b) => a.count - b.count);
-  return workloads[0].prof;
 }
 
 /**

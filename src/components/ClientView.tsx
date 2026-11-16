@@ -5,12 +5,14 @@ import {
   Professional,
   Appointment,
   AnamnesisRecord,
+  BusyBlock,
   ClinicSettings,
+  Leave,
   UserProfile
 } from '../types/clinic';
+import type { BookingInput } from '../services/api';
 import {
   calculateAvailableSlots,
-  assignFairProfessional,
   checkCancellationEligibility,
   formatLocalDate,
   formatLocalTime,
@@ -45,11 +47,14 @@ interface ClientViewProps {
   services: Service[];
   professionals: Professional[];
   appointments: Appointment[];
+  busyBlocks: BusyBlock[]; // horários ocupados de todos os clientes (sem dados pessoais)
+  leaves: Leave[];
   anamnesis: AnamnesisRecord;
   settings: ClinicSettings;
-  onBookAppointment: (newApt: Partial<Appointment>) => void;
-  onCancelAppointment: (aptId: string, reason: string) => void;
-  onUpdateAnamnesis: (updated: Partial<AnamnesisRecord>) => void;
+  /** Retorna o id do agendamento criado, ou null se falhou (o App já mostra o motivo). */
+  onBookAppointment: (input: BookingInput) => Promise<string | null>;
+  onCancelAppointment: (aptId: string, reason: string) => Promise<boolean>;
+  onUpdateAnamnesis: (updated: Partial<AnamnesisRecord>) => Promise<boolean>;
   onExportData: () => void;
 }
 
@@ -59,6 +64,8 @@ export function ClientView({
   services,
   professionals,
   appointments,
+  busyBlocks,
+  leaves,
   anamnesis,
   settings,
   onBookAppointment,
@@ -92,6 +99,8 @@ export function ClientView({
   const [selectedDate, setSelectedDate] = useState<string>(dateOptions[1].dateStr); // Começa em amanhã
   const [selectedSlot, setSelectedSlot] = useState<TimeSlot | null>(null);
   const [clientNotes, setClientNotes] = useState('');
+  const [isBooking, setIsBooking] = useState(false);
+  const [bookedAptId, setBookedAptId] = useState<string | null>(null);
 
   // Anamnese Form State
   const [anamnesisAllergies, setAnamnesisAllergies] = useState(anamnesis.allergies);
@@ -116,7 +125,8 @@ export function ClientView({
         service: selectedService,
         dateStr: selectedDate,
         professionals,
-        appointments,
+        appointments: busyBlocks,
+        leaves,
         customBufferMinutes: settings.defaultBufferMinutes
       })
     : [];
@@ -127,49 +137,39 @@ export function ClientView({
     setBookingStep(1);
   };
 
-  const handleConfirmBooking = () => {
-    if (!selectedService || !selectedSlot) return;
-
-    let finalProfessionalId = selectedSlot.professionalId;
-
-    // Se escolheu primeiro disponível, roda algoritmo de distribuição justa
-    if (selectedProfId === 'AUTO_ASSIGN') {
-      const fairProf = assignFairProfessional({
-        serviceId: selectedService.id,
-        slotStartIso: selectedSlot.startIso,
-        slotBufferEndIso: selectedSlot.bufferEndIso,
-        professionals,
-        appointments
+  const handleConfirmBooking = async () => {
+    if (!selectedService || !selectedSlot || isBooking) return;
+    setIsBooking(true);
+    try {
+      // 1) Salva a ficha de anamnese (precisa existir antes do atendimento)
+      const anamnesisSaved = await onUpdateAnamnesis({
+        allergies: anamnesisAllergies,
+        currentMedications: anamnesisMedications,
+        pregnantOrLactating: anamnesisPregnant,
+        hasPacemakerOrImplants: anamnesisPacemaker
       });
-      if (fairProf) {
-        finalProfessionalId = fairProf.id;
+      if (!anamnesisSaved) return;
+
+      // 2) Agenda. Com "primeiro disponível", o banco escolhe a profissional (distribuição justa)
+      //    e valida jornada, ausências e conflito de horário de forma atômica.
+      const newId = await onBookAppointment({
+        serviceId: selectedService.id,
+        startIso: selectedSlot.startIso,
+        professionalId: selectedProfId === 'AUTO_ASSIGN' ? null : selectedSlot.professionalId,
+        notes: clientNotes.trim() || undefined
+      });
+
+      if (newId) {
+        setBookedAptId(newId);
+        setBookingStep(4);
+      } else {
+        // Horário pode ter sido tomado: volta para escolher outro (a grade já foi atualizada)
+        setSelectedSlot(null);
+        setBookingStep(2);
       }
+    } finally {
+      setIsBooking(false);
     }
-
-    onBookAppointment({
-      clientId: currentUser.id,
-      clientName: currentUser.fullName,
-      clientPhone: currentUser.phone,
-      clientEmail: currentUser.email,
-      professionalId: finalProfessionalId,
-      serviceId: selectedService.id,
-      startTime: selectedSlot.startIso,
-      endTime: selectedSlot.endIso,
-      bufferEndTime: selectedSlot.bufferEndIso,
-      totalPriceCents: selectedService.priceCents,
-      clientNotes: clientNotes.trim() || undefined
-    });
-
-    // Atualiza ficha se editada
-    onUpdateAnamnesis({
-      allergies: anamnesisAllergies,
-      currentMedications: anamnesisMedications,
-      pregnantOrLactating: anamnesisPregnant,
-      hasPacemakerOrImplants: anamnesisPacemaker
-    });
-
-    // Reset wizard
-    setBookingStep(4);
   };
 
   return (
@@ -645,16 +645,16 @@ export function ClientView({
 
               <div className="pt-2 flex justify-end">
                 <button
-                  disabled={!lgpdConsentChecked}
+                  disabled={!lgpdConsentChecked || isBooking}
                   onClick={handleConfirmBooking}
                   className={`px-6 py-2.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
-                    lgpdConsentChecked
+                    lgpdConsentChecked && !isBooking
                       ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-lg shadow-rose-600/30'
                       : 'bg-slate-800 text-slate-500 cursor-not-allowed'
                   }`}
                 >
                   <CheckCircle2 className="w-4 h-4" />
-                  Confirmar Agendamento
+                  {isBooking ? 'Confirmando...' : 'Confirmar Agendamento'}
                 </button>
               </div>
             </div>
@@ -668,14 +668,14 @@ export function ClientView({
               </div>
               <h3 className="text-xl font-bold text-white">Agendamento Confirmado com Sucesso!</h3>
               <p className="text-xs text-slate-300 max-w-md mx-auto leading-relaxed">
-                Sua reserva foi gravada no banco com garantia de concorrência. Você receberá uma confirmação imediata e lembrete automático no WhatsApp.
+                Sua reserva foi gravada no banco com garantia de concorrência. A confirmação e um lembrete 24h antes foram colocados na fila de envio.
               </p>
 
               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 max-w-sm mx-auto text-left text-xs space-y-1.5">
                 <div className="text-slate-400">Procedimento: <strong className="text-white">{selectedService.name}</strong></div>
                 <div className="text-slate-400">Data e Hora: <strong className="text-white">{selectedDate} às {selectedSlot?.timeStr}</strong></div>
-                <div className="text-slate-400">Profissional: <strong className="text-white">{selectedSlot?.professionalName}</strong></div>
-                <div className="text-slate-400">WhatsApp: <strong className="text-emerald-400">{currentUser.phone} (Notificado via Meta API)</strong></div>
+                <div className="text-slate-400">Profissional: <strong className="text-white">{professionals.find((p) => p.id === appointments.find((a) => a.id === bookedAptId)?.professionalId)?.name ?? selectedSlot?.professionalName}</strong></div>
+                <div className="text-slate-400">Contato: <strong className="text-emerald-400">{currentUser.phone || currentUser.email}</strong></div>
               </div>
 
               <div className="pt-2">
@@ -933,9 +933,12 @@ export function ClientView({
                 Manter Agendamento
               </button>
               <button
-                onClick={() => {
-                  onCancelAppointment(cancellingApt.id, cancelReasonInput);
-                  setCancellingApt(null);
+                onClick={async () => {
+                  const ok = await onCancelAppointment(cancellingApt.id, cancelReasonInput);
+                  if (ok) {
+                    setCancellingApt(null);
+                    setCancelReasonInput('');
+                  }
                 }}
                 className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-xs font-semibold text-white shadow-md shadow-rose-600/30"
               >
