@@ -113,6 +113,15 @@ export function ClientView({
   const [cancellingApt, setCancellingApt] = useState<Appointment | null>(null);
   const [cancelReasonInput, setCancelReasonInput] = useState('');
 
+  // O cliente só vê o que dá para agendar: procedimento ativo, de categoria ativa e com profissional ativa vinculada.
+  const catalogServices = services.filter(
+    (s) =>
+      s.isActive &&
+      categories.some((c) => c.id === s.categoryId && c.isActive) &&
+      professionals.some((p) => p.isActive && p.specialtyServiceIds.includes(s.id))
+  );
+  const catalogCategories = categories.filter((c) => c.isActive && catalogServices.some((s) => s.categoryId === c.id));
+
   // Meus agendamentos do usuário logado
   const myAppointments = appointments
     .filter((a) => a.clientId === currentUser.id)
@@ -127,7 +136,8 @@ export function ClientView({
         professionals,
         appointments: busyBlocks,
         leaves,
-        customBufferMinutes: settings.defaultBufferMinutes
+        customBufferMinutes: settings.defaultBufferMinutes,
+        stepMinutes: settings.slotStepMinutes
       })
     : [];
 
@@ -260,15 +270,15 @@ export function ClientView({
           {/* Hero Banner Estético */}
           <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-rose-950/40 via-slate-900 to-indigo-950/40 border border-rose-500/20 p-6 md:p-8">
             <div className="max-w-2xl">
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-rose-500/10 text-rose-300 border border-rose-500/30 mb-3">
-                <Sparkles className="w-3 h-3 text-rose-400" /> Experiência Clínica Premium
-              </span>
-              <h1 className="text-2xl md:text-3xl font-bold text-white tracking-tight">
-                Realce sua beleza natural com protocolos biomédicos exclusivos
-              </h1>
-              <p className="text-xs md:text-sm text-slate-300 mt-2 leading-relaxed">
-                Agendamento 100% online com confirmação imediata via WhatsApp. Selecione seu procedimento abaixo e encontre os melhores horários.
-              </p>
+              {settings.heroBadge && (
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-rose-500/10 text-rose-300 border border-rose-500/30 mb-3">
+                  <Sparkles className="w-3 h-3 text-rose-400" /> {settings.heroBadge}
+                </span>
+              )}
+              <h1 className="text-2xl md:text-3xl font-bold text-white tracking-tight">{settings.heroTitle}</h1>
+              {settings.heroSubtitle && (
+                <p className="text-xs md:text-sm text-slate-300 mt-2 leading-relaxed">{settings.heroSubtitle}</p>
+              )}
             </div>
           </div>
 
@@ -282,9 +292,9 @@ export function ClientView({
                   : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
               }`}
             >
-              Todos os Procedimentos ({services.length})
+              Todos os Procedimentos ({catalogServices.length})
             </button>
-            {categories.map((cat) => (
+            {catalogCategories.map((cat) => (
               <button
                 key={cat.id}
                 onClick={() => setSelectedCategory(cat.id)}
@@ -300,8 +310,14 @@ export function ClientView({
           </div>
 
           {/* Grid de Procedimentos */}
+          {catalogServices.length === 0 && (
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center text-xs text-slate-400">
+              Os procedimentos desta clínica ainda estão sendo cadastrados. Volte em breve
+              {settings.phone ? <> ou fale conosco: <strong className="text-slate-200">{settings.phone}</strong></> : null}.
+            </div>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {services
+            {catalogServices
               .filter((s) => selectedCategory === 'all' || s.categoryId === selectedCategory)
               .map((service) => (
                 <div
@@ -309,6 +325,9 @@ export function ClientView({
                   className="bg-slate-900 border border-slate-800 hover:border-rose-500/40 rounded-2xl p-5 flex flex-col justify-between transition-all group hover:shadow-xl hover:shadow-rose-500/5"
                 >
                   <div>
+                    {service.imageUrl && (
+                      <img src={service.imageUrl} alt="" loading="lazy" className="w-full h-32 object-cover rounded-xl mb-3 border border-slate-800" />
+                    )}
                     <div className="flex items-start justify-between gap-2 mb-2">
                       <h3 className="font-bold text-white text-base group-hover:text-rose-300 transition-colors">
                         {service.name}
@@ -419,7 +438,7 @@ export function ClientView({
 
                 {/* Profissionais Específicos */}
                 {professionals
-                  .filter((p) => p.specialtyServiceIds.includes(selectedService.id))
+                  .filter((p) => p.isActive && p.specialtyServiceIds.includes(selectedService.id))
                   .map((prof) => (
                     <div
                       key={prof.id}
@@ -430,11 +449,20 @@ export function ClientView({
                           : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
                       }`}
                     >
-                      <img
-                        src={prof.avatarUrl}
-                        alt={prof.name}
-                        className="w-10 h-10 rounded-full object-cover border border-slate-700"
-                      />
+                      {prof.avatarUrl ? (
+                        <img
+                          src={prof.avatarUrl}
+                          alt={prof.name}
+                          className="w-10 h-10 rounded-full object-cover border border-slate-700"
+                        />
+                      ) : (
+                        <div
+                          style={{ backgroundColor: prof.colorHex }}
+                          className="w-10 h-10 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0"
+                        >
+                          {prof.name.replace(/^dra?\.?\s+/i, '').split(/\s+/).slice(0, 2).map((w) => w[0]?.toUpperCase()).join('')}
+                        </div>
+                      )}
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between">
                           <h4 className="text-xs font-bold text-white truncate">{prof.name}</h4>

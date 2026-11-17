@@ -9,37 +9,54 @@ Sistema de agendamento online de alta performance para clínica de estética com
 
 ---
 
+## 🏢 Multi-clínica: um sistema, várias clínicas independentes
+
+Cada clínica que aluga o sistema tem **seu próprio espaço**: endereço (slug), marca (nome, logo, cor, textos), procedimentos,
+profissionais, horários, clientes e agenda — totalmente isolados no banco (RLS + chaves compostas).
+
+| Quem | O que faz |
+|---|---|
+| **Plataforma** (você, que aluga o sistema) | Cria/suspende clínicas em `/?plataforma=1` (ou por SQL). Não vê dados de clientes das clínicas. |
+| **Dono(a) da clínica** (`ADMIN`) | No painel: cadastra/edita **procedimentos** (nome, descrição, preço, duração, foto, categoria), **profissionais**, **jornada semanal e folgas/bloqueios**, personaliza **logo/cor/textos/regras** e gerencia a **equipe**. |
+| Recepção / Profissional | Agenda, status e fichas da própria clínica. |
+| Cliente | Agenda pelo link da clínica. A mesma conta pode ser cliente em várias clínicas. |
+
+### Como a clínica é identificada
+`https://app.com/?clinica=bella` · `https://app.com/c/bella` · ou subdomínio `https://bella.seudominio.com.br`
+(defina `VITE_BASE_DOMAIN` e aponte um domínio coringa `*.seudominio.com.br` para o projeto na Vercel).
+Para uma instalação de uma clínica só, use `VITE_DEFAULT_CLINIC_SLUG`.
+
 ## ⚙️ Configuração (tudo roda no Supabase, sem dados locais)
 
-O app não usa mais dados de exemplo nem `localStorage`: tudo é lido e gravado no Supabase, e cada pessoa entra com a própria conta.
-
-1. **Banco:** no *SQL Editor*, rode **nesta ordem**
-   1. `supabase/migrations/20261104000100_initial_schema.sql` (se ainda não rodou)
-   2. `supabase/migrations/20261116000100_app_integration.sql` — correções de segurança, novas tabelas/colunas, funções de agendamento e dados-base (configurações e catálogo de 7 serviços). Pode ser reexecutada sem problemas.
-2. **Variáveis:** copie `.env.example` para `.env` e preencha `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY` (Project Settings → API). Use a chave **anon**, nunca a `service_role`.
+1. **Banco:** no *SQL Editor*, rode **nesta ordem** (todas podem ser reexecutadas):
+   1. `supabase/migrations/20261104000100_initial_schema.sql`
+   2. `supabase/migrations/20261116000100_app_integration.sql`
+   3. `supabase/migrations/20261117000100_multi_clinic.sql` — multi-clínica. Se você já tinha a clínica única funcionando, ela vira a clínica `aesthetiq`, com todos os dados e papéis preservados. Também cria o bucket de imagens `clinic-assets`.
+2. **Variáveis:** copie `.env.example` para `.env` e preencha `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY` (chave **anon**, nunca a `service_role`).
 3. **Rodar:** `npm install && npm run dev`.
-4. **Primeiro administrador:** crie uma conta pela tela do app e, no SQL Editor:
+4. **Você, dono da plataforma** — crie uma conta pelo app e, no SQL Editor:
    ```sql
-   update public.profiles set role = 'ADMIN' where email = 'seu@email.com';
+   insert into public.platform_admins (user_id) select id from public.profiles where email = 'voce@email.com';
    ```
-   (Por segurança, ninguém consegue se promover pelo app; o papel só muda por aqui ou por um Admin.)
-5. **Profissionais:** crie o usuário em *Authentication → Users* e rode, por profissional:
+   Depois abra `/?plataforma=1` para criar clínicas.
+5. **Criar uma clínica nova** (pelo painel da plataforma, ou por SQL):
    ```sql
-   select public.promote_to_professional(
-     'camila@clinica.com', 'Dra. Camila Vasconcellos', 'Biomédica Esteta',
-     'CRBM-SP 34.892', 'Bio opcional', '#ec4899', null  -- null = habilita todos os serviços
-   );
+   select public.create_clinic('clinica-bella', 'Clínica Bella', 'dona@bella.com', '#7c3aed', '(11) 99999-0000');
    ```
-   Isso cria a ficha, a jornada padrão (seg–sex 08:30–18:30 com almoço, sáb 08:30–14:00) e os procedimentos. Recepção: `update public.profiles set role = 'RECEPTIONIST' where email = '...';`
-6. **Auth:** se *Confirm email* estiver ligado em Authentication → Providers → Email, novos clientes precisam confirmar o e-mail antes de entrar (o app avisa).
+   A dona cria a conta com esse e-mail, entra em `…?clinica=clinica-bella` e já cai como **administradora**.
+   Ela então segue o checklist "Primeiros passos" do painel: profissionais → horários → procedimentos → marca.
+6. **Auth:** em produção mantenha *Confirm email* **ligado** (Authentication → Providers → Email): convites de dono/equipe só valem para e-mail confirmado. Adicione as URLs das clínicas em *Authentication → URL Configuration → Redirect URLs* (ou o padrão coringa do seu domínio).
 
 ### Como funciona a segurança
 - Clientes só leem os **próprios** agendamentos e anamnese (RLS). Os horários ocupados chegam por `get_busy_slots`, sem dados pessoais.
 - Agendar, cancelar e mudar status são funções do banco (`book_appointment`, `cancel_my_appointment`, `update_appointment_status`): preço, duração, jornada, ausências e antecedência mínima são validados lá, e o conflito de horário é garantido pela `EXCLUDE` constraint.
 - A equipe abre a anamnese por `staff_view_anamnesis`, que **registra o acesso** no log de auditoria automaticamente.
 
-### Limitação conhecida
-As notificações são **gravadas na fila** (`notifications_log`), mas nada as envia ainda: falta um worker (ex.: Edge Function agendada) ligado ao WhatsApp Cloud API / Resend.
+### Limitações conhecidas
+- Fuso fixo em America/Sao_Paulo para todas as clínicas.
+- A tela "Meu Dashboard" do cliente ainda mostra dados ilustrativos (gráficos e "Nível Gold VIP"), herdados do protótipo.
+- `supabase_schema.sql` na raiz é o schema inicial antigo (sem multi-clínica); use as migrations.
+- As notificações são **gravadas na fila** (`notifications_log`), mas nada as envia ainda: falta um worker (ex.: Edge Function agendada) ligado ao WhatsApp Cloud API / Resend.
 
 ---
 

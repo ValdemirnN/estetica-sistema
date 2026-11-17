@@ -80,6 +80,8 @@ export function calculateAvailableSlots(params: {
   appointments: BusyBlock[]; // horários ocupados (de TODOS os clientes, sem dados pessoais)
   leaves?: Leave[];
   customBufferMinutes?: number;
+  /** De quantos em quantos minutos a grade é oferecida (configurável pela clínica). */
+  stepMinutes?: number;
 }): TimeSlot[] {
   const {
     selectedProfessionalId,
@@ -88,7 +90,8 @@ export function calculateAvailableSlots(params: {
     professionals,
     appointments,
     leaves = [],
-    customBufferMinutes
+    customBufferMinutes,
+    stepMinutes = 15
   } = params;
 
   const targetDate = new Date(`${dateStr}T12:00:00-03:00`);
@@ -96,6 +99,7 @@ export function calculateAvailableSlots(params: {
 
   // Filtrar profissionais qualificados para o serviço
   const eligiblePros = professionals.filter((p) => {
+    if (!p.isActive) return false;
     const handlesService = p.specialtyServiceIds.includes(service.id);
     if (!handlesService) return false;
     if (selectedProfessionalId === 'AUTO_ASSIGN') {
@@ -131,8 +135,6 @@ export function calculateAvailableSlots(params: {
     // Buscar ausências/folgas do profissional
     const profLeaves = leaves.filter((l) => l.professionalId === prof.id);
 
-    // Passo da grade de horários: a cada 15 ou 30 minutos
-    const stepMinutes = 15;
     let currentCursor = new Date(dayStart);
 
     while (true) {

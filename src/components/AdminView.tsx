@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
 import {
   Appointment,
+  Leave,
   Professional,
   Service,
+  ServiceCategory,
   ClinicSettings,
   AnamnesisOverviewItem,
   AnamnesisRecord,
@@ -11,6 +13,9 @@ import {
 } from '../types/clinic';
 import { formatLocalDate, formatLocalTime } from '../services/slotCalculator';
 import { AdminDashboard } from './AdminDashboard';
+import { ServicesManager } from './admin/ServicesManager';
+import { ProfessionalsManager } from './admin/ProfessionalsManager';
+import { ClinicSettingsPanel } from './admin/ClinicSettingsPanel';
 import {
   Calendar as CalendarIcon,
   Clock,
@@ -27,6 +32,7 @@ import {
   ChevronRight,
   Filter,
   Plus,
+  Tag,
   Eye,
   MessageSquare,
   Lock,
@@ -36,31 +42,40 @@ import {
 
 interface AdminViewProps {
   currentUser: UserProfile;
+  clinicId: string;
   appointments: Appointment[];
+  categories: ServiceCategory[];
   professionals: Professional[];
   services: Service[];
+  leaves: Leave[];
   settings: ClinicSettings;
   anamnesisOverview: AnamnesisOverviewItem[]; // lista sem dados de saúde
   onUpdateStatus: (aptId: string, newStatus: AppointmentStatus, note?: string) => void;
-  onUpdateProfessional: (prof: Professional) => void;
-  onUpdateSettings: (newSettings: ClinicSettings) => void;
+  /** Recarrega catálogo, profissionais e marca depois de uma edição do dono. */
+  onCatalogChanged: () => Promise<void>;
+  notify: (msg: string) => void;
   /** Abre a ficha; o banco registra o acesso na trilha de auditoria (LGPD). */
   onOpenAnamnesis: (clientId: string) => Promise<AnamnesisRecord | null>;
 }
 
+type AdminTab = 'dashboard' | 'calendar' | 'services' | 'professionals' | 'clients' | 'settings';
+
 export function AdminView({
   currentUser,
+  clinicId,
   appointments,
+  categories,
   professionals,
   services,
+  leaves,
   settings,
   anamnesisOverview,
   onUpdateStatus,
-  onUpdateProfessional,
-  onUpdateSettings,
+  onCatalogChanged,
+  notify,
   onOpenAnamnesis
 }: AdminViewProps) {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'calendar' | 'professionals' | 'clients' | 'settings'>('dashboard');
+  const [activeTab, setActiveTab] = useState<AdminTab>('dashboard');
   const [selectedProfFilter, setSelectedProfFilter] = useState<string>('ALL');
   const [viewMode, setViewMode] = useState<'daily' | 'weekly'>('daily');
 
@@ -71,9 +86,6 @@ export function AdminView({
   const [statusModalApt, setStatusModalApt] = useState<Appointment | null>(null);
   const [selectedNewStatus, setSelectedNewStatus] = useState<AppointmentStatus>('COMPLETED');
   const [statusChangeNote, setStatusChangeNote] = useState('');
-
-  // Configurações formulário
-  const [formSettings, setFormSettings] = useState<ClinicSettings>(settings);
 
   // Filtro de agendamentos por profissional
   const filteredAppointments = appointments.filter((apt) => {
@@ -110,66 +122,77 @@ export function AdminView({
     setStatusChangeNote('');
   };
 
+  const tabs: { id: AdminTab; label: string; icon: React.ReactNode; adminOnly?: boolean }[] = (
+    [
+      { id: 'dashboard', label: 'Dashboard & Indicadores', icon: <BarChart3 className="w-3.5 h-3.5" /> },
+      { id: 'calendar', label: 'Agenda Clínica', icon: <CalendarIcon className="w-3.5 h-3.5" /> },
+      { id: 'services', label: 'Procedimentos & Preços', icon: <Tag className="w-3.5 h-3.5" />, adminOnly: true },
+      { id: 'professionals', label: 'Profissionais & Horários', icon: <Users className="w-3.5 h-3.5" />, adminOnly: true },
+      { id: 'clients', label: 'Fichas & Anamnese', icon: <FileText className="w-3.5 h-3.5" /> },
+      { id: 'settings', label: 'Minha Clínica', icon: <Settings className="w-3.5 h-3.5" />, adminOnly: true }
+    ] as { id: AdminTab; label: string; icon: React.ReactNode; adminOnly?: boolean }[]
+  ).filter((t) => isAdmin || !t.adminOnly);
+
+  // Passos para a clínica ficar pronta para receber agendamentos (só o dono vê)
+  const setupSteps = [
+    { done: professionals.some((p) => p.isActive), label: 'Cadastre quem atende', tab: 'professionals' as AdminTab },
+    { done: professionals.some((p) => p.isActive && p.workingHours.some((w) => w.isActive)), label: 'Defina os dias e horários de atendimento', tab: 'professionals' as AdminTab },
+    { done: services.some((s) => s.isActive), label: 'Cadastre seus procedimentos e preços', tab: 'services' as AdminTab },
+    {
+      done: services.some((s) => s.isActive && professionals.some((p) => p.isActive && p.specialtyServiceIds.includes(s.id))),
+      label: 'Vincule os procedimentos a quem realiza',
+      tab: 'services' as AdminTab
+    },
+    { done: !!settings.logoUrl || settings.primaryColor.toLowerCase() !== '#e11d48', label: 'Personalize logo, cores e textos', tab: 'settings' as AdminTab }
+  ];
+  const nextStep = setupSteps.find((st) => !st.done);
+
   return (
     <div className="space-y-6">
+      {isAdmin && nextStep && (
+        <div className="bg-slate-900 border border-rose-500/30 rounded-2xl p-4 space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-sm font-bold text-white">Primeiros passos para receber agendamentos</h3>
+            <span className="text-[11px] text-slate-400">
+              {setupSteps.filter((x) => x.done).length}/{setupSteps.length} concluídos
+            </span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {setupSteps.map((st) => (
+              <button
+                key={st.label}
+                onClick={() => setActiveTab(st.tab)}
+                className={`flex items-center gap-2 text-left text-xs px-3 py-2 rounded-xl border transition-colors ${
+                  st.done
+                    ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-300'
+                    : 'border-slate-700 bg-slate-950 text-slate-200 hover:border-rose-500/50'
+                }`}
+              >
+                {st.done ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <span className="w-4 h-4 rounded-full border border-slate-600 shrink-0" />}
+                {st.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Top Admin Sub-bar */}
       <div className="flex flex-wrap items-center justify-between border-b border-slate-800 pb-3 gap-3">
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setActiveTab('dashboard')}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-2 ${
-              activeTab === 'dashboard'
-                ? 'bg-rose-600 text-white shadow-md shadow-rose-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <BarChart3 className="w-3.5 h-3.5" />
-            Dashboard & Indicadores
-          </button>
-          <button
-            onClick={() => setActiveTab('calendar')}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-2 ${
-              activeTab === 'calendar'
-                ? 'bg-rose-600 text-white shadow-md shadow-rose-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <CalendarIcon className="w-3.5 h-3.5" />
-            Agenda Clínica
-          </button>
-          <button
-            onClick={() => setActiveTab('professionals')}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-2 ${
-              activeTab === 'professionals'
-                ? 'bg-rose-600 text-white shadow-md shadow-rose-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <Users className="w-3.5 h-3.5" />
-            Profissionais & Horários
-          </button>
-          <button
-            onClick={() => setActiveTab('clients')}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-2 ${
-              activeTab === 'clients'
-                ? 'bg-rose-600 text-white shadow-md shadow-rose-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <FileText className="w-3.5 h-3.5" />
-            Fichas & Anamnese
-          </button>
-          <button
-            onClick={() => setActiveTab('settings')}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-2 ${
-              activeTab === 'settings'
-                ? 'bg-rose-600 text-white shadow-md shadow-rose-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <Settings className="w-3.5 h-3.5" />
-            Regras de Negócio
-          </button>
+        <div className="flex items-center gap-2 overflow-x-auto max-w-full">
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setActiveTab(t.id)}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-2 whitespace-nowrap ${
+                activeTab === t.id
+                  ? 'bg-rose-600 text-white shadow-md shadow-rose-600/30'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              }`}
+            >
+              {t.icon}
+              {t.label}
+            </button>
+          ))}
         </div>
 
         <div className="flex items-center gap-2 text-xs">
@@ -308,75 +331,29 @@ export function AdminView({
         </div>
       )}
 
-      {/* ================= ABA 2: PROFISSIONAIS & HORÁRIOS ================= */}
-      {activeTab === 'professionals' && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="text-base font-bold text-white flex items-center gap-2">
-              <Users className="w-4 h-4 text-rose-400" /> Corpo Clínico & Gestão de Cabines
-            </h3>
-            <span className="text-xs text-slate-400">
-              Controle de jornadas, buffers de higienização e especialidades
-            </span>
-          </div>
+      {/* ================= ABA: PROCEDIMENTOS & PREÇOS ================= */}
+      {activeTab === 'services' && isAdmin && (
+        <ServicesManager
+          clinicId={clinicId}
+          categories={categories}
+          services={services}
+          professionals={professionals}
+          onChanged={onCatalogChanged}
+          notify={notify}
+          goToProfessionals={() => setActiveTab('professionals')}
+        />
+      )}
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {professionals.map((prof) => (
-              <div
-                key={prof.id}
-                className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 flex flex-col justify-between"
-              >
-                <div>
-                  <div className="flex items-center gap-3 mb-3">
-                    <img
-                      src={prof.avatarUrl}
-                      alt={prof.name}
-                      className="w-12 h-12 rounded-xl object-cover border border-slate-700"
-                    />
-                    <div>
-                      <h4 className="font-bold text-white text-sm">{prof.name}</h4>
-                      <p className="text-xs text-slate-400">{prof.title}</p>
-                      <span className="text-[10px] text-rose-400 font-mono">{prof.registryNumber}</span>
-                    </div>
-                  </div>
-
-                  <div className="space-y-2 text-xs bg-slate-950 p-3 rounded-xl border border-slate-800">
-                    <div className="flex justify-between text-slate-300">
-                      <span>Intervalo pós-atendimento (Buffer):</span>
-                      <strong className="text-emerald-400">{prof.intervalBufferMinutes} min</strong>
-                    </div>
-                    <div className="flex justify-between text-slate-300">
-                      <span>Distribuição Automática ("Primeiro Disp."):</span>
-                      <strong className={prof.isAvailableForAutoAssign ? 'text-emerald-400' : 'text-slate-500'}>
-                        {prof.isAvailableForAutoAssign ? 'Ativo' : 'Inativo'}
-                      </strong>
-                    </div>
-                    <div className="flex justify-between text-slate-300">
-                      <span>Procedimentos habilitados:</span>
-                      <span className="text-white font-mono">{prof.specialtyServiceIds.length} serviços</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="pt-2 border-t border-slate-800 flex justify-between items-center text-xs">
-                  <span className="text-slate-500">Jornada Seg-Sáb</span>
-                  {isAdmin && <button
-                    onClick={() => {
-                      const newBuffer = prof.intervalBufferMinutes === 15 ? 20 : 15;
-                      onUpdateProfessional({
-                        ...prof,
-                        intervalBufferMinutes: newBuffer
-                      });
-                    }}
-                    className="text-rose-400 hover:text-rose-300 font-semibold"
-                  >
-                    Alternar Buffer ({prof.intervalBufferMinutes}m)
-                  </button>}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+      {/* ================= ABA: PROFISSIONAIS & HORÁRIOS ================= */}
+      {activeTab === 'professionals' && isAdmin && (
+        <ProfessionalsManager
+          clinicId={clinicId}
+          professionals={professionals}
+          services={services}
+          leaves={leaves}
+          onChanged={onCatalogChanged}
+          notify={notify}
+        />
       )}
 
       {/* ================= ABA 3: FICHAS DE CLIENTES & ANAMNESE ================= */}
@@ -416,85 +393,15 @@ export function AdminView({
         </div>
       )}
 
-      {/* ================= ABA 4: CONFIGURAÇÕES & REGRAS DE NEGÓCIO ================= */}
-      {activeTab === 'settings' && (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-2xl mx-auto space-y-5">
-          <div className="border-b border-slate-800 pb-3">
-            <h3 className="text-base font-bold text-white flex items-center gap-2">
-              <Settings className="w-4 h-4 text-rose-400" /> Parâmetros de Funcionamento da Clínica
-            </h3>
-            <p className="text-xs text-slate-400 mt-1">
-              Políticas de cancelamento, intervalo padrão e algoritmos de concorrência.
-            </p>
-          </div>
-
-          <div className="space-y-4 text-xs">
-            <div>
-              <label className="text-slate-300 font-semibold block mb-1">
-                Antecedência Mínima para Cancelamento / Remarcação (Horas):
-              </label>
-              <div className="flex items-center gap-3">
-                <input
-                  type="number"
-                  min={1}
-                  max={72}
-                  value={formSettings.minCancelNoticeHours}
-                  onChange={(e) => setFormSettings({ ...formSettings, minCancelNoticeHours: Number(e.target.value) })}
-                  className="w-24 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-white font-mono focus:outline-none focus:border-rose-500"
-                />
-                <span className="text-slate-400">
-                  horas antes do atendimento (Clientes não conseguem cancelar online abaixo deste prazo).
-                </span>
-              </div>
-            </div>
-
-            <div>
-              <label className="text-slate-300 font-semibold block mb-1">
-                Intervalo Padrão entre Atendimentos (Buffer de Higienização):
-              </label>
-              <div className="flex items-center gap-3">
-                <select
-                  value={formSettings.defaultBufferMinutes}
-                  onChange={(e) => setFormSettings({ ...formSettings, defaultBufferMinutes: Number(e.target.value) })}
-                  className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-white font-mono focus:outline-none focus:border-rose-500"
-                >
-                  <option value={10}>10 minutos</option>
-                  <option value={15}>15 minutos (Padrão)</option>
-                  <option value={20}>20 minutos</option>
-                  <option value={30}>30 minutos</option>
-                </select>
-                <span className="text-slate-400">Garante tempo de esterilização entre pacientes.</span>
-              </div>
-            </div>
-
-            <div>
-              <label className="text-slate-300 font-semibold block mb-1">
-                Estratégia do "Primeiro Disponível":
-              </label>
-              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-slate-300">
-                <strong className="text-rose-400">Distribuição Justa (Round-Robin com Least-Busy):</strong>
-                <p className="text-[11px] text-slate-400 mt-1">
-                  Distribui os agendamentos automáticos priorizando a profissional com menor número de sessões na semana, equilibrando a comissão e o faturamento da equipe.
-                </p>
-              </div>
-            </div>
-
-            <div className="pt-3 flex justify-end">
-              <button
-                disabled={!isAdmin}
-                title={isAdmin ? undefined : 'Apenas o perfil Admin pode alterar as regras da clínica'}
-                onClick={() => onUpdateSettings(formSettings)}
-                className={`px-5 py-2.5 rounded-xl font-semibold transition-all ${
-                  isAdmin
-                    ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-md shadow-rose-600/30'
-                    : 'bg-slate-800 text-slate-500 cursor-not-allowed'
-                }`}
-              >
-                Salvar Regras da Clínica
-              </button>
-            </div>
-          </div>
-        </div>
+      {/* ================= ABA: MINHA CLÍNICA (marca, regras, equipe) ================= */}
+      {activeTab === 'settings' && isAdmin && (
+        <ClinicSettingsPanel
+          clinicId={clinicId}
+          settings={settings}
+          currentUserId={currentUser.id}
+          onChanged={onCatalogChanged}
+          notify={notify}
+        />
       )}
 
       {/* ================= MODAL: ALTERAR STATUS & AUDITORIA ================= */}

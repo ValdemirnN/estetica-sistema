@@ -91,7 +91,7 @@ export function NotificationsView({
               Olá, <strong>Juliana</strong>! ✨
             </p>
             <p className="text-slate-300">
-              Passando para lembrar do seu atendimento na <strong>Aesthetiq Clínica</strong> amanhã:
+              Passando para lembrar do seu atendimento na <strong>sua clínica</strong> amanhã:
             </p>
             <div className="bg-slate-950/80 p-2.5 rounded-lg border border-slate-800 space-y-1 text-[11px]">
               <div>Procedimento: <strong>Limpeza de Pele Profunda</strong></div>

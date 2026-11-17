@@ -2,11 +2,15 @@ import React, { useState } from 'react';
 import { Sparkles, LogIn, UserPlus, Loader2, MailCheck } from 'lucide-react';
 import { signIn, signUp } from '../services/api';
 
+import type { ClinicBranding } from '../types/clinic';
+
 interface AuthScreenProps {
-  clinicName?: string | null;
+  /** Clínica do endereço (marca no login). Nula = entrada geral da plataforma. */
+  clinic?: ClinicBranding | null;
+  platform?: boolean;
 }
 
-export function AuthScreen({ clinicName }: AuthScreenProps) {
+export function AuthScreen({ clinic, platform }: AuthScreenProps) {
   const [mode, setMode] = useState<'login' | 'signup'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -49,12 +53,16 @@ export function AuthScreen({ clinicName }: AuthScreenProps) {
     <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4 font-sans">
       <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl">
         <div className="flex items-center gap-3 mb-6">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-pink-500 via-rose-500 to-indigo-600 flex items-center justify-center text-white shadow-lg shadow-pink-500/20">
-            <Sparkles className="w-5 h-5" />
-          </div>
+          {clinic?.logoUrl ? (
+            <img src={clinic.logoUrl} alt={clinic.name} className="w-10 h-10 rounded-xl object-cover border border-slate-700" />
+          ) : (
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-pink-500 via-rose-500 to-rose-700 flex items-center justify-center text-white shadow-lg shadow-rose-500/20">
+              <Sparkles className="w-5 h-5" />
+            </div>
+          )}
           <div>
-            <h1 className="font-bold text-lg text-white tracking-tight">{clinicName ?? 'Aesthetiq'}</h1>
-            <p className="text-[11px] text-slate-400">Agendamento Biomédico & Gestão de Cabines</p>
+            <h1 className="font-bold text-lg text-white tracking-tight">{clinic?.name ?? (platform ? 'Plataforma' : 'Agendamento')}</h1>
+            <p className="text-[11px] text-slate-400">{clinic?.tagline ?? (platform ? 'Acesso do administrador' : 'Entre pelo link da sua clínica')}</p>
           </div>
         </div>
 

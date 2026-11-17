@@ -29,6 +29,8 @@ export interface ServiceCategory {
   slug: string;
   iconName: string;
   description: string;
+  displayOrder: number;
+  isActive: boolean;
 }
 
 export interface Service {
@@ -43,6 +45,7 @@ export interface Service {
   requiresAnamnesis: boolean;
   imageUrl?: string;
   badge?: string;
+  isActive: boolean;
 }
 
 export interface WorkingHours {
@@ -65,6 +68,7 @@ export interface Professional {
   avatarUrl: string;
   intervalBufferMinutes: number;
   isAvailableForAutoAssign: boolean;
+  isActive: boolean;
   specialtyServiceIds: string[];
   workingHours: WorkingHours[];
 }
@@ -144,14 +148,59 @@ export interface NotificationLog {
   payload: Record<string, any>;
 }
 
-export interface ClinicSettings {
+/** Dados públicos da clínica (marca): disponíveis antes do login. */
+export interface ClinicBranding {
+  id: string;
+  slug: string;
   name: string;
+  tagline: string;
+  heroBadge: string;
+  heroTitle: string;
+  heroSubtitle: string;
+  logoUrl?: string;
+  primaryColor: string; // '#e11d48'
   phone: string;
+  whatsapp: string;
   address: string;
+  isActive: boolean;
+}
+
+/** Marca + regras de negócio da clínica (o dono edita tudo isto no painel). */
+export interface ClinicSettings extends ClinicBranding {
   minCancelNoticeHours: number; // Antecedência mínima para cancelar/remarcar (ex: 2h ou 24h)
   defaultBufferMinutes: number; // Intervalo de higienização padrão
+  slotStepMinutes: number; // De quantos em quantos minutos a grade de horários é oferecida
   autoAssignStrategy: 'ROUND_ROBIN' | 'LEAST_BUSY';
   workingDays: number[];
+}
+
+/** Pessoa da equipe (ou convite pendente) mostrada na tela "Equipe e acessos". */
+export interface TeamMember {
+  userId: string;
+  fullName: string;
+  email: string;
+  role: UserRole;
+  isActive: boolean;
+}
+
+export interface TeamInvite {
+  id: string;
+  email: string;
+  role: UserRole;
+}
+
+/** Linha do painel da plataforma (dono do SaaS). */
+export interface PlatformClinic {
+  id: string;
+  slug: string;
+  name: string;
+  primaryColor: string;
+  isActive: boolean;
+  createdAt: string;
+  members: number;
+  appointments30d: number;
+  owners: string[];
+  pendingOwnerInvites: string[];
 }
 
 /** Janela ocupada de um profissional (sem dados pessoais), usada para calcular horários livres. */

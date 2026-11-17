@@ -6,14 +6,19 @@ import {
   Appointment,
   AppointmentStatus,
   BusyBlock,
+  ClinicBranding,
   ClinicSettings,
   DayOfWeek,
   Leave,
   NotificationLog,
+  PlatformClinic,
   Professional,
   Service,
   ServiceCategory,
+  TeamInvite,
+  TeamMember,
   UserProfile,
+  UserRole,
   WorkingHours
 } from '../types/clinic';
 
@@ -61,7 +66,11 @@ export async function signUp(params: { email: string; password: string; fullName
   const { data, error } = await supabase.auth.signUp({
     email: params.email,
     password: params.password,
-    options: { data: { full_name: params.fullName, phone: params.phone } }
+    options: {
+      data: { full_name: params.fullName, phone: params.phone },
+      // O e-mail de confirmação volta para a MESMA clínica em que a pessoa se cadastrou.
+      emailRedirectTo: `${window.location.origin}${window.location.pathname}${window.location.search}`
+    }
   });
   if (error) throw new ApiError(error.message);
   return { needsEmailConfirmation: !data.session };
@@ -72,16 +81,59 @@ export async function signOut() {
 }
 
 // ---------------------------------------------------------------------------
+// Clínica (tenant)
+// ---------------------------------------------------------------------------
+
+function mapBranding(r: any): ClinicBranding {
+  return {
+    id: r.id,
+    slug: r.slug,
+    name: r.name,
+    tagline: r.tagline ?? '',
+    heroBadge: r.hero_badge ?? '',
+    heroTitle: r.hero_title ?? '',
+    heroSubtitle: r.hero_subtitle ?? '',
+    logoUrl: r.logo_url || undefined,
+    primaryColor: r.primary_color ?? '#e11d48',
+    phone: r.phone ?? '',
+    whatsapp: r.whatsapp ?? '',
+    address: r.address ?? '',
+    isActive: r.is_active
+  };
+}
+
+/** Marca pública da clínica (tela de login e tema), disponível antes de qualquer sessão. */
+export async function fetchClinicPublic(slug: string): Promise<ClinicBranding | null> {
+  const { data, error } = await supabase.rpc('get_clinic_public', { p_slug: slug });
+  if (error) fail(error, 'Clínica');
+  return data ? mapBranding(data) : null;
+}
+
+/** Cria o vínculo do usuário com a clínica (cliente, ou o papel do convite) e devolve o papel. */
+export async function joinClinic(clinicId: string): Promise<UserRole> {
+  const { data, error } = await supabase.rpc('join_clinic', { p_clinic_id: clinicId });
+  if (error) fail(error, 'Clínica');
+  return data as UserRole;
+}
+
+export async function isPlatformAdmin(): Promise<boolean> {
+  const { data, error } = await supabase.rpc('is_platform_admin');
+  if (error) return false;
+  return data === true;
+}
+
+// ---------------------------------------------------------------------------
 // Perfil
 // ---------------------------------------------------------------------------
 
-export async function fetchProfile(userId: string): Promise<UserProfile> {
+/** O papel é POR CLÍNICA: vem do vínculo (joinClinic), não do perfil global. */
+export async function fetchProfile(userId: string, role: UserRole): Promise<UserProfile> {
   const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
   if (error) fail(error, 'Perfil');
   if (!data) throw new ApiError('Perfil não encontrado. Se o cadastro acabou de ser feito, tente novamente em instantes.');
   return {
     id: data.id,
-    role: data.role,
+    role,
     fullName: data.full_name,
     email: data.email,
     phone: data.phone ?? '',
@@ -96,7 +148,7 @@ export async function fetchProfile(userId: string): Promise<UserProfile> {
 }
 
 // ---------------------------------------------------------------------------
-// Catálogo, profissionais, configurações (leitura liberada a qualquer usuário logado)
+// Catálogo, profissionais, configurações (leitura liberada a membros da clínica)
 // ---------------------------------------------------------------------------
 
 export interface Catalog {
@@ -107,143 +159,551 @@ export interface Catalog {
   settings: ClinicSettings;
 }
 
-export async function fetchCatalog(): Promise<Catalog> {
-  const [cats, svcs, pros, leaves, settings] = await Promise.all([
-    supabase.from('service_categories').select('*').eq('is_active', true).order('display_order'),
-    supabase.from('services').select('*').eq('is_active', true).order('name'),
+export async function fetchCatalog(clinicId: string): Promise<Catalog> {
+  const [cats, svcs, pros, leaves, clinic] = await Promise.all([
+    supabase.from('service_categories').select('*').eq('clinic_id', clinicId).order('display_order').order('name'),
+    supabase.from('services').select('*').eq('clinic_id', clinicId).order('name'),
     supabase
       .from('professionals')
       .select('*, professional_working_hours(*), professional_services(service_id)')
+      .eq('clinic_id', clinicId)
       .order('name'),
-    supabase.from('professional_leaves').select('*').gte('end_datetime', new Date().toISOString()),
-    supabase.from('clinic_settings').select('*').maybeSingle()
+    supabase
+      .from('professional_leaves')
+      .select('*')
+      .eq('clinic_id', clinicId)
+      .gte('end_datetime', new Date().toISOString())
+      .order('start_datetime'),
+    supabase.from('clinics').select('*').eq('id', clinicId).maybeSingle()
   ]);
 
   if (cats.error) fail(cats.error, 'Categorias');
   if (svcs.error) fail(svcs.error, 'Serviços');
   if (pros.error) fail(pros.error, 'Profissionais');
   if (leaves.error) fail(leaves.error, 'Ausências');
-  if (settings.error) fail(settings.error, 'Configurações');
-  if (!settings.data) {
-    throw new ApiError('Configurações da clínica não encontradas. Aplique a migration 20261116000100_app_integration.sql.');
+  if (clinic.error) fail(clinic.error, 'Clínica');
+  if (!clinic.data) {
+    throw new ApiError('Clínica não encontrada ou sem acesso. Aplique a migration 20261117000100_multi_clinic.sql.');
   }
 
   return {
-    categories: cats.data.map((c) => ({
-      id: c.id,
-      name: c.name,
-      slug: c.slug,
-      iconName: c.icon_name,
-      description: c.description ?? ''
-    })),
-    services: svcs.data.map((s) => ({
-      id: s.id,
-      categoryId: s.category_id,
-      name: s.name,
-      slug: s.slug,
-      description: s.description ?? '',
-      durationMinutes: s.duration_minutes,
-      priceCents: s.price_cents,
-      recoveryInfo: s.recovery_info ?? '',
-      requiresAnamnesis: s.requires_anamnesis,
-      imageUrl: s.image_url ?? undefined,
-      badge: s.badge ?? undefined
-    })),
-    professionals: pros.data.map((p) => ({
-      id: p.id,
-      profileId: p.profile_id,
-      name: p.name ?? 'Profissional',
-      title: p.title ?? '',
-      registryNumber: p.registry_number ?? '',
-      bio: p.bio ?? '',
-      colorHex: p.color_hex,
-      avatarUrl: p.avatar_url ?? '',
-      intervalBufferMinutes: p.interval_buffer_minutes,
-      isAvailableForAutoAssign: p.is_available_for_auto_assign,
-      specialtyServiceIds: (p.professional_services ?? []).map((x: { service_id: string }) => x.service_id),
-      workingHours: (p.professional_working_hours ?? []).map(
-        (w: any): WorkingHours => ({
-          dayOfWeek: DAY_FROM_DB[w.day_of_week],
-          startTime: hhmm(w.start_time)!,
-          endTime: hhmm(w.end_time)!,
-          breakStartTime: hhmm(w.break_start_time),
-          breakEndTime: hhmm(w.break_end_time),
-          isActive: w.is_active
-        })
-      )
-    })),
-    leaves: leaves.data.map((l) => ({
-      id: l.id,
-      professionalId: l.professional_id,
-      startDatetime: l.start_datetime,
-      endDatetime: l.end_datetime,
-      reason: l.reason ?? ''
-    })),
-    settings: mapSettings(settings.data)
+    categories: cats.data.map(
+      (c): ServiceCategory => ({
+        id: c.id,
+        name: c.name,
+        slug: c.slug,
+        iconName: c.icon_name,
+        description: c.description ?? '',
+        displayOrder: c.display_order ?? 0,
+        isActive: c.is_active
+      })
+    ),
+    services: svcs.data.map(
+      (s): Service => ({
+        id: s.id,
+        categoryId: s.category_id,
+        name: s.name,
+        slug: s.slug,
+        description: s.description ?? '',
+        durationMinutes: s.duration_minutes,
+        priceCents: s.price_cents,
+        recoveryInfo: s.recovery_info ?? '',
+        requiresAnamnesis: s.requires_anamnesis,
+        imageUrl: s.image_url ?? undefined,
+        badge: s.badge ?? undefined,
+        isActive: s.is_active
+      })
+    ),
+    professionals: pros.data.map(
+      (p): Professional => ({
+        id: p.id,
+        profileId: p.profile_id ?? '',
+        name: p.name ?? 'Profissional',
+        title: p.title ?? '',
+        registryNumber: p.registry_number ?? '',
+        bio: p.bio ?? '',
+        colorHex: p.color_hex,
+        avatarUrl: p.avatar_url ?? '',
+        intervalBufferMinutes: p.interval_buffer_minutes,
+        isAvailableForAutoAssign: p.is_available_for_auto_assign,
+        isActive: p.is_active,
+        specialtyServiceIds: (p.professional_services ?? []).map((x: { service_id: string }) => x.service_id),
+        workingHours: (p.professional_working_hours ?? []).map(
+          (w: any): WorkingHours => ({
+            dayOfWeek: DAY_FROM_DB[w.day_of_week],
+            startTime: hhmm(w.start_time)!,
+            endTime: hhmm(w.end_time)!,
+            breakStartTime: hhmm(w.break_start_time),
+            breakEndTime: hhmm(w.break_end_time),
+            isActive: w.is_active
+          })
+        )
+      })
+    ),
+    leaves: leaves.data.map(
+      (l): Leave => ({
+        id: l.id,
+        professionalId: l.professional_id,
+        startDatetime: l.start_datetime,
+        endDatetime: l.end_datetime,
+        reason: l.reason ?? ''
+      })
+    ),
+    settings: mapSettings(clinic.data)
   };
 }
 
 function mapSettings(r: any): ClinicSettings {
   return {
-    name: r.name,
-    phone: r.phone,
-    address: r.address,
+    ...mapBranding(r),
     minCancelNoticeHours: r.min_cancel_notice_hours,
     defaultBufferMinutes: r.default_buffer_minutes,
+    slotStepMinutes: r.slot_step_minutes ?? 15,
     autoAssignStrategy: r.auto_assign_strategy,
     workingDays: r.working_days
   };
 }
 
-/** Só o nome da clínica; usado na tela de login, antes de qualquer dado privado. */
-export async function fetchClinicName(): Promise<string | null> {
-  const { data } = await supabase.from('clinic_settings').select('name').maybeSingle();
-  return data?.name ?? null;
-}
-
 // ---------------------------------------------------------------------------
-// Escritas administrativas (RLS: somente ADMIN).
+// Escritas administrativas (RLS: somente ADMIN DA CLÍNICA).
 // Uma escrita bloqueada por RLS NÃO gera erro no Supabase: volta 0 linhas.
 // Por isso conferimos as linhas afetadas.
 // ---------------------------------------------------------------------------
 
-const NOT_ALLOWED = 'Você não tem permissão para esta alteração (apenas o perfil Admin).';
+const NOT_ALLOWED = 'Você não tem permissão para esta alteração (apenas o administrador da clínica).';
 
-export async function updateProfessional(prof: Professional): Promise<void> {
+/** Traduz erros comuns de banco para mensagens que o dono da clínica entende. */
+function adminFail(error: { message: string; code?: string }, context: string): never {
+  if (error.code === '23503') {
+    throw new ApiError(
+      `${context}: este item já está em uso (por exemplo, em agendamentos). Em vez de excluir, use "Desativar" para escondê-lo dos clientes sem perder o histórico.`,
+      error.code
+    );
+  }
+  if (error.code === '23505') throw new ApiError(`${context}: já existe um item com esse nome.`, error.code);
+  fail(error, context);
+}
+
+const slugify = (text: string) =>
+  text
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60) || 'item';
+
+const uniqueSlug = (text: string) => `${slugify(text)}-${Math.random().toString(36).slice(2, 6)}`;
+
+// --- Clínica: marca e regras ---
+
+export async function updateClinic(clinicId: string, s: ClinicSettings): Promise<void> {
   const { data, error } = await supabase
-    .from('professionals')
+    .from('clinics')
     .update({
-      name: prof.name,
-      title: prof.title,
-      bio: prof.bio,
-      registry_number: prof.registryNumber,
-      color_hex: prof.colorHex,
-      avatar_url: prof.avatarUrl || null,
-      interval_buffer_minutes: prof.intervalBufferMinutes,
-      is_available_for_auto_assign: prof.isAvailableForAutoAssign
+      name: s.name.trim(),
+      tagline: s.tagline.trim(),
+      hero_badge: s.heroBadge.trim(),
+      hero_title: s.heroTitle.trim(),
+      hero_subtitle: s.heroSubtitle.trim(),
+      logo_url: s.logoUrl || null,
+      primary_color: s.primaryColor,
+      phone: s.phone.trim(),
+      whatsapp: s.whatsapp.trim(),
+      address: s.address.trim(),
+      min_cancel_notice_hours: s.minCancelNoticeHours,
+      default_buffer_minutes: s.defaultBufferMinutes,
+      slot_step_minutes: s.slotStepMinutes,
+      auto_assign_strategy: s.autoAssignStrategy
     })
-    .eq('id', prof.id)
+    .eq('id', clinicId)
     .select('id');
-  if (error) fail(error, 'Profissional');
+  if (error) adminFail(error, 'Configurações');
   if (!data?.length) throw new ApiError(NOT_ALLOWED);
 }
 
-export async function updateSettings(s: ClinicSettings): Promise<void> {
-  const { data, error } = await supabase
-    .from('clinic_settings')
-    .update({
-      name: s.name,
-      phone: s.phone,
-      address: s.address,
-      min_cancel_notice_hours: s.minCancelNoticeHours,
-      default_buffer_minutes: s.defaultBufferMinutes,
-      auto_assign_strategy: s.autoAssignStrategy,
-      working_days: s.workingDays
-    })
-    .eq('id', true)
-    .select('id');
-  if (error) fail(error, 'Configurações');
+// --- Imagens (logo, fotos): Supabase Storage, pasta = id da clínica ---
+
+const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
+
+export async function uploadClinicImage(clinicId: string, file: File): Promise<string> {
+  if (!IMAGE_TYPES.includes(file.type)) throw new ApiError('Use uma imagem PNG, JPG ou WebP.');
+  if (file.size > 2 * 1024 * 1024) throw new ApiError('A imagem deve ter no máximo 2 MB.');
+  const ext = file.type === 'image/png' ? 'png' : file.type === 'image/webp' ? 'webp' : 'jpg';
+  const path = `${clinicId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+  const { error } = await supabase.storage.from('clinic-assets').upload(path, file, {
+    contentType: file.type,
+    cacheControl: '31536000'
+  });
+  if (error) {
+    if (/bucket not found/i.test(error.message)) {
+      throw new ApiError('O armazenamento de imagens ainda não foi criado. Aplique a migration multi-clínica no Supabase.');
+    }
+    throw new ApiError(`Não foi possível enviar a imagem: ${error.message}`);
+  }
+  return supabase.storage.from('clinic-assets').getPublicUrl(path).data.publicUrl;
+}
+
+// --- Categorias ---
+
+export interface CategoryInput {
+  id?: string;
+  name: string;
+  description: string;
+  displayOrder: number;
+  isActive: boolean;
+}
+
+export async function saveCategory(clinicId: string, c: CategoryInput): Promise<void> {
+  const row = {
+    name: c.name.trim(),
+    description: c.description.trim() || null,
+    display_order: c.displayOrder,
+    is_active: c.isActive
+  };
+  if (c.id) {
+    const { data, error } = await supabase.from('service_categories').update(row).eq('id', c.id).select('id');
+    if (error) adminFail(error, 'Categoria');
+    if (!data?.length) throw new ApiError(NOT_ALLOWED);
+  } else {
+    const { error } = await supabase
+      .from('service_categories')
+      .insert({ ...row, clinic_id: clinicId, slug: uniqueSlug(c.name) });
+    if (error) adminFail(error, 'Categoria');
+  }
+}
+
+export async function deleteCategory(id: string): Promise<void> {
+  const { data, error } = await supabase.from('service_categories').delete().eq('id', id).select('id');
+  if (error) {
+    if (error.code === '23503') {
+      throw new ApiError('Esta categoria ainda tem procedimentos. Mova ou exclua os procedimentos antes, ou apenas desative a categoria.');
+    }
+    adminFail(error, 'Categoria');
+  }
   if (!data?.length) throw new ApiError(NOT_ALLOWED);
+}
+
+// --- Procedimentos ---
+
+export interface ServiceInput {
+  id?: string;
+  categoryId: string;
+  name: string;
+  description: string;
+  durationMinutes: number;
+  priceCents: number;
+  recoveryInfo: string;
+  requiresAnamnesis: boolean;
+  badge: string;
+  imageUrl: string;
+  isActive: boolean;
+  /** Profissionais que realizam este procedimento (sem isso, ele não aparece com horários). */
+  professionalIds: string[];
+}
+
+async function syncServiceProfessionals(clinicId: string, serviceId: string, professionalIds: string[]) {
+  const { data: current, error } = await supabase
+    .from('professional_services')
+    .select('professional_id')
+    .eq('service_id', serviceId);
+  if (error) adminFail(error, 'Procedimento');
+  const have = new Set((current ?? []).map((r: any) => r.professional_id as string));
+  const want = new Set(professionalIds);
+
+  const toAdd = [...want].filter((id) => !have.has(id));
+  const toRemove = [...have].filter((id) => !want.has(id));
+
+  if (toAdd.length) {
+    const { error: e } = await supabase
+      .from('professional_services')
+      .insert(toAdd.map((professional_id) => ({ clinic_id: clinicId, professional_id, service_id: serviceId })));
+    if (e) adminFail(e, 'Profissionais do procedimento');
+  }
+  if (toRemove.length) {
+    const { error: e } = await supabase
+      .from('professional_services')
+      .delete()
+      .eq('service_id', serviceId)
+      .in('professional_id', toRemove);
+    if (e) adminFail(e, 'Profissionais do procedimento');
+  }
+}
+
+export async function saveService(clinicId: string, s: ServiceInput): Promise<void> {
+  const row = {
+    category_id: s.categoryId,
+    name: s.name.trim(),
+    description: s.description.trim() || null,
+    duration_minutes: s.durationMinutes,
+    price_cents: s.priceCents,
+    recovery_info: s.recoveryInfo.trim() || null,
+    requires_anamnesis: s.requiresAnamnesis,
+    badge: s.badge.trim() || null,
+    image_url: s.imageUrl || null,
+    is_active: s.isActive
+  };
+
+  let serviceId = s.id;
+  if (serviceId) {
+    const { data, error } = await supabase.from('services').update(row).eq('id', serviceId).select('id');
+    if (error) adminFail(error, 'Procedimento');
+    if (!data?.length) throw new ApiError(NOT_ALLOWED);
+  } else {
+    const { data, error } = await supabase
+      .from('services')
+      .insert({ ...row, clinic_id: clinicId, slug: uniqueSlug(s.name) })
+      .select('id')
+      .single();
+    if (error) adminFail(error, 'Procedimento');
+    serviceId = data.id as string;
+  }
+  await syncServiceProfessionals(clinicId, serviceId!, s.professionalIds);
+}
+
+export async function deleteService(id: string): Promise<void> {
+  const { data, error } = await supabase.from('services').delete().eq('id', id).select('id');
+  if (error) adminFail(error, 'Procedimento');
+  if (!data?.length) throw new ApiError(NOT_ALLOWED);
+}
+
+// --- Profissionais, jornada e ausências ---
+
+export interface ProfessionalInput {
+  id?: string;
+  name: string;
+  title: string;
+  registryNumber: string;
+  bio: string;
+  colorHex: string;
+  avatarUrl: string;
+  intervalBufferMinutes: number;
+  isAvailableForAutoAssign: boolean;
+  isActive: boolean;
+  serviceIds: string[];
+  workingHours: WorkingHours[];
+}
+
+const DAY_TO_DB: Record<number, string> = {
+  0: 'SUNDAY', 1: 'MONDAY', 2: 'TUESDAY', 3: 'WEDNESDAY', 4: 'THURSDAY', 5: 'FRIDAY', 6: 'SATURDAY'
+};
+
+/** Jornada inicial de quem acabou de ser cadastrada: seg–sex 09:00–18:00 com almoço, sábado fechado. */
+export function defaultWorkingHours(): WorkingHours[] {
+  return ([0, 1, 2, 3, 4, 5, 6] as DayOfWeek[]).map((d) => ({
+    dayOfWeek: d,
+    startTime: '09:00',
+    endTime: '18:00',
+    breakStartTime: '12:00',
+    breakEndTime: '13:00',
+    isActive: d >= 1 && d <= 5
+  }));
+}
+
+export async function saveProfessional(clinicId: string, p: ProfessionalInput): Promise<string> {
+  const row = {
+    name: p.name.trim(),
+    title: p.title.trim() || null,
+    registry_number: p.registryNumber.trim() || null,
+    bio: p.bio.trim() || null,
+    color_hex: p.colorHex,
+    avatar_url: p.avatarUrl || null,
+    interval_buffer_minutes: p.intervalBufferMinutes,
+    is_available_for_auto_assign: p.isAvailableForAutoAssign,
+    is_active: p.isActive
+  };
+
+  let id = p.id;
+  if (id) {
+    const { data, error } = await supabase.from('professionals').update(row).eq('id', id).select('id');
+    if (error) adminFail(error, 'Profissional');
+    if (!data?.length) throw new ApiError(NOT_ALLOWED);
+  } else {
+    const { data, error } = await supabase
+      .from('professionals')
+      .insert({ ...row, clinic_id: clinicId })
+      .select('id')
+      .single();
+    if (error) adminFail(error, 'Profissional');
+    id = data.id as string;
+  }
+
+  // Procedimentos que ela realiza
+  const { data: current, error: curErr } = await supabase
+    .from('professional_services')
+    .select('service_id')
+    .eq('professional_id', id!);
+  if (curErr) adminFail(curErr, 'Profissional');
+  const have = new Set((current ?? []).map((r: any) => r.service_id as string));
+  const want = new Set(p.serviceIds);
+  const toAdd = [...want].filter((x) => !have.has(x));
+  const toRemove = [...have].filter((x) => !want.has(x));
+  if (toAdd.length) {
+    const { error } = await supabase
+      .from('professional_services')
+      .insert(toAdd.map((service_id) => ({ clinic_id: clinicId, professional_id: id, service_id })));
+    if (error) adminFail(error, 'Procedimentos da profissional');
+  }
+  if (toRemove.length) {
+    const { error } = await supabase
+      .from('professional_services')
+      .delete()
+      .eq('professional_id', id!)
+      .in('service_id', toRemove);
+    if (error) adminFail(error, 'Procedimentos da profissional');
+  }
+
+  // Jornada semanal: uma linha por dia (upsert)
+  for (const w of p.workingHours) {
+    if (w.isActive && w.startTime >= w.endTime) {
+      throw new ApiError('Em cada dia de atendimento, o horário de início deve ser antes do fim.');
+    }
+    const hasBreak = !!w.breakStartTime && !!w.breakEndTime;
+    if (w.isActive && hasBreak && !(w.breakStartTime! < w.breakEndTime! && w.breakStartTime! >= w.startTime && w.breakEndTime! <= w.endTime)) {
+      throw new ApiError('O intervalo (almoço) precisa estar dentro do horário de atendimento do dia.');
+    }
+  }
+  const { error: whErr } = await supabase.from('professional_working_hours').upsert(
+    p.workingHours.map((w) => {
+      const hasBreak = !!w.breakStartTime && !!w.breakEndTime;
+      return {
+        clinic_id: clinicId,
+        professional_id: id,
+        day_of_week: DAY_TO_DB[w.dayOfWeek],
+        start_time: w.startTime,
+        end_time: w.endTime,
+        break_start_time: hasBreak ? w.breakStartTime : null,
+        break_end_time: hasBreak ? w.breakEndTime : null,
+        is_active: w.isActive
+      };
+    }),
+    { onConflict: 'professional_id,day_of_week' }
+  );
+  if (whErr) adminFail(whErr, 'Jornada');
+
+  return id!;
+}
+
+export async function deleteProfessional(id: string): Promise<void> {
+  const { data, error } = await supabase.from('professionals').delete().eq('id', id).select('id');
+  if (error) adminFail(error, 'Profissional');
+  if (!data?.length) throw new ApiError(NOT_ALLOWED);
+}
+
+export async function addLeave(
+  clinicId: string,
+  professionalId: string,
+  startIso: string,
+  endIso: string,
+  reason: string
+): Promise<void> {
+  if (new Date(startIso) >= new Date(endIso)) throw new ApiError('A data/hora final precisa ser depois da inicial.');
+  const { error } = await supabase.from('professional_leaves').insert({
+    clinic_id: clinicId,
+    professional_id: professionalId,
+    start_datetime: startIso,
+    end_datetime: endIso,
+    reason: reason.trim() || null
+  });
+  if (error) adminFail(error, 'Bloqueio de agenda');
+}
+
+export async function deleteLeave(id: string): Promise<void> {
+  const { data, error } = await supabase.from('professional_leaves').delete().eq('id', id).select('id');
+  if (error) adminFail(error, 'Bloqueio de agenda');
+  if (!data?.length) throw new ApiError(NOT_ALLOWED);
+}
+
+// --- Equipe e acessos ---
+
+export async function fetchTeam(clinicId: string): Promise<{ members: TeamMember[]; invites: TeamInvite[] }> {
+  const [m, i] = await Promise.all([
+    supabase
+      .from('clinic_members')
+      .select('user_id, role, is_active, profile:profiles!clinic_members_user_id_fkey(full_name, email)')
+      .eq('clinic_id', clinicId)
+      .neq('role', 'CLIENT')
+      .order('created_at'),
+    supabase.from('clinic_invites').select('id, email, role').eq('clinic_id', clinicId).order('created_at')
+  ]);
+  if (m.error) fail(m.error, 'Equipe');
+  if (i.error) fail(i.error, 'Convites');
+  return {
+    members: (m.data ?? []).map((r: any) => ({
+      userId: r.user_id,
+      fullName: r.profile?.full_name ?? 'Usuário',
+      email: r.profile?.email ?? '',
+      role: r.role,
+      isActive: r.is_active
+    })),
+    invites: (i.data ?? []).map((r: any) => ({ id: r.id, email: r.email, role: r.role }))
+  };
+}
+
+/** 'MEMBER' = já tinha conta e o papel valeu na hora; 'INVITED' = vale quando se cadastrar. */
+export async function inviteMember(clinicId: string, email: string, role: UserRole): Promise<'MEMBER' | 'INVITED'> {
+  const { data, error } = await supabase.rpc('invite_member', { p_clinic_id: clinicId, p_email: email, p_role: role });
+  if (error) fail(error, 'Equipe');
+  return data as 'MEMBER' | 'INVITED';
+}
+
+export async function setMemberAccess(clinicId: string, userId: string, role: UserRole, active = true): Promise<void> {
+  const { error } = await supabase.rpc('set_member_access', {
+    p_clinic_id: clinicId,
+    p_user_id: userId,
+    p_role: role,
+    p_active: active
+  });
+  if (error) fail(error, 'Equipe');
+}
+
+export async function revokeInvite(inviteId: string): Promise<void> {
+  const { error } = await supabase.from('clinic_invites').delete().eq('id', inviteId);
+  if (error) fail(error, 'Convite');
+}
+
+// --- Plataforma (dono do SaaS) ---
+
+export async function platformListClinics(): Promise<PlatformClinic[]> {
+  const { data, error } = await supabase.rpc('platform_list_clinics');
+  if (error) fail(error, 'Clínicas');
+  return ((data ?? []) as any[]).map(
+    (c): PlatformClinic => ({
+      id: c.id,
+      slug: c.slug,
+      name: c.name,
+      primaryColor: c.primary_color,
+      isActive: c.is_active,
+      createdAt: c.created_at,
+      members: Number(c.members),
+      appointments30d: Number(c.appointments_30d),
+      owners: c.owners ?? [],
+      pendingOwnerInvites: c.pending_owner_invites ?? []
+    })
+  );
+}
+
+export async function platformCreateClinic(params: {
+  slug: string;
+  name: string;
+  ownerEmail: string;
+  primaryColor: string;
+  phone: string;
+}): Promise<void> {
+  const { error } = await supabase.rpc('create_clinic', {
+    p_slug: params.slug,
+    p_name: params.name,
+    p_owner_email: params.ownerEmail,
+    p_primary_color: params.primaryColor,
+    p_phone: params.phone
+  });
+  if (error) fail(error, 'Nova clínica');
+}
+
+export async function platformSetClinicActive(clinicId: string, active: boolean): Promise<void> {
+  const { data, error } = await supabase.from('clinics').update({ is_active: active }).eq('id', clinicId).select('id');
+  if (error) fail(error, 'Clínica');
+  if (!data?.length) throw new ApiError('Sem permissão para alterar esta clínica.');
 }
 
 // ---------------------------------------------------------------------------
@@ -255,10 +715,11 @@ const APPOINTMENT_SELECT =
   'history:appointment_status_history(status, changed_at, changed_by_name, note)';
 
 /** Cliente recebe só os próprios agendamentos; equipe recebe todos (RLS decide). */
-export async function fetchAppointments(): Promise<Appointment[]> {
+export async function fetchAppointments(clinicId: string): Promise<Appointment[]> {
   const { data, error } = await supabase
     .from('appointments')
     .select(APPOINTMENT_SELECT)
+    .eq('clinic_id', clinicId)
     .order('start_time', { ascending: false });
   if (error) fail(error, 'Agendamentos');
 
@@ -293,10 +754,11 @@ export async function fetchAppointments(): Promise<Appointment[]> {
 }
 
 /** Horários ocupados de todos os profissionais, sem dados pessoais (para a grade de horários). */
-export async function fetchBusyBlocks(daysAhead = 60): Promise<BusyBlock[]> {
+export async function fetchBusyBlocks(clinicId: string, daysAhead = 60): Promise<BusyBlock[]> {
   const from = new Date();
   const to = new Date(from.getTime() + daysAhead * 86400000);
   const { data, error } = await supabase.rpc('get_busy_slots', {
+    p_clinic_id: clinicId,
     p_from: from.toISOString(),
     p_to: to.toISOString()
   });
@@ -403,14 +865,20 @@ function mapAnamnesis(r: any, logs: any[] = []): AnamnesisRecord {
 }
 
 /** Ficha do próprio cliente (ou ficha vazia se ainda não preencheu). */
-export async function fetchMyAnamnesis(userId: string): Promise<AnamnesisRecord> {
-  const { data, error } = await supabase.from('anamnesis_records').select('*').eq('client_id', userId).maybeSingle();
+export async function fetchMyAnamnesis(clinicId: string, userId: string): Promise<AnamnesisRecord> {
+  const { data, error } = await supabase
+    .from('anamnesis_records')
+    .select('*')
+    .eq('clinic_id', clinicId)
+    .eq('client_id', userId)
+    .maybeSingle();
   if (error) fail(error, 'Anamnese');
   return data ? mapAnamnesis(data) : emptyAnamnesis(userId);
 }
 
-export async function saveMyAnamnesis(userId: string, a: Partial<AnamnesisRecord>): Promise<AnamnesisRecord> {
+export async function saveMyAnamnesis(clinicId: string, userId: string, a: Partial<AnamnesisRecord>): Promise<AnamnesisRecord> {
   const row = {
+    clinic_id: clinicId,
     client_id: userId,
     allergies: a.allergies ?? '',
     skin_type: a.skinType ?? '',
@@ -423,7 +891,7 @@ export async function saveMyAnamnesis(userId: string, a: Partial<AnamnesisRecord
   };
   const { data, error } = await supabase
     .from('anamnesis_records')
-    .upsert(row, { onConflict: 'client_id' })
+    .upsert(row, { onConflict: 'clinic_id,client_id' })
     .select('*')
     .single();
   if (error) fail(error, 'Anamnese');
@@ -431,8 +899,8 @@ export async function saveMyAnamnesis(userId: string, a: Partial<AnamnesisRecord
 }
 
 /** Equipe: lista de prontuários, sem conteúdo de saúde. */
-export async function fetchAnamnesisOverview(): Promise<AnamnesisOverviewItem[]> {
-  const { data, error } = await supabase.rpc('staff_list_anamnesis');
+export async function fetchAnamnesisOverview(clinicId: string): Promise<AnamnesisOverviewItem[]> {
+  const { data, error } = await supabase.rpc('staff_list_anamnesis', { p_clinic_id: clinicId });
   if (error) fail(error, 'Prontuários');
   return (data ?? []).map((r: any) => ({
     clientId: r.client_id,
@@ -443,8 +911,8 @@ export async function fetchAnamnesisOverview(): Promise<AnamnesisOverviewItem[]>
 }
 
 /** Equipe: abre a ficha. O banco registra o acesso no log de auditoria automaticamente. */
-export async function openAnamnesisAsStaff(clientId: string): Promise<AnamnesisRecord | null> {
-  const { data, error } = await supabase.rpc('staff_view_anamnesis', { p_client_id: clientId });
+export async function openAnamnesisAsStaff(clinicId: string, clientId: string): Promise<AnamnesisRecord | null> {
+  const { data, error } = await supabase.rpc('staff_view_anamnesis', { p_clinic_id: clinicId, p_client_id: clientId });
   if (error) fail(error, 'Prontuário');
   if (!data) return null;
   return mapAnamnesis(data, data.access_logs ?? []);
@@ -454,10 +922,11 @@ export async function openAnamnesisAsStaff(clientId: string): Promise<AnamnesisR
 // Notificações (fila gravada no banco; o envio é feito por um worker externo)
 // ---------------------------------------------------------------------------
 
-export async function fetchNotifications(): Promise<NotificationLog[]> {
+export async function fetchNotifications(clinicId: string): Promise<NotificationLog[]> {
   const { data, error } = await supabase
     .from('notifications_log')
     .select('*, recipient:profiles!notifications_log_recipient_id_fkey(full_name)')
+    .eq('clinic_id', clinicId)
     .order('scheduled_for', { ascending: false })
     .limit(200);
   if (error) fail(error, 'Notificações');

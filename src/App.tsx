@@ -11,16 +11,16 @@ import {
   fetchAppointments,
   fetchBusyBlocks,
   fetchCatalog,
-  fetchClinicName,
+  fetchClinicPublic,
   fetchMyAnamnesis,
   fetchNotifications,
   fetchProfile,
+  isPlatformAdmin,
+  joinClinic,
   openAnamnesisAsStaff,
   saveMyAnamnesis,
   signOut,
   updateAppointmentStatus,
-  updateProfessional,
-  updateSettings,
   BookingInput
 } from './services/api';
 import {
@@ -29,9 +29,8 @@ import {
   AnamnesisRecord,
   AppointmentStatus,
   BusyBlock,
-  ClinicSettings,
+  ClinicBranding,
   NotificationLog,
-  Professional,
   UserProfile,
   UserRole
 } from './types/clinic';
@@ -40,6 +39,9 @@ import { AdminView } from './components/AdminView';
 import { NotificationsView } from './components/NotificationsView';
 import { ConcurrencySimulator } from './components/ConcurrencySimulator';
 import { AuthScreen } from './components/AuthScreen';
+import { PlatformAdmin } from './components/PlatformAdmin';
+import { applyTheme, resetTheme } from './lib/theme';
+import { isPlatformRoute, resolveClinicSlug } from './lib/tenant';
 import { FULL_SQL_SCHEMA } from './mock/sqlSchema';
 import {
   Sparkles,
@@ -53,7 +55,8 @@ import {
   LogOut,
   Copy,
   Check,
-  Smartphone
+  Smartphone,
+  Building2
 } from 'lucide-react';
 
 const ROLE_LABEL: Record<UserRole, string> = {
@@ -90,10 +93,13 @@ export default function App() {
   return <AuthGate />;
 }
 
-/** Decide entre tela de login e o sistema, conforme a sessão do Supabase Auth. */
+/** Decide entre login e sistema, conforme a clínica do endereço e a sessão do Supabase Auth. */
 function AuthGate() {
+  const slug = React.useMemo(resolveClinicSlug, []);
+  const platformRoute = React.useMemo(isPlatformRoute, []);
   const [session, setSession] = useState<Session | null | undefined>(undefined); // undefined = carregando
-  const [clinicName, setClinicName] = useState<string | null>(null);
+  const [clinic, setClinic] = useState<ClinicBranding | null | undefined>(slug ? undefined : null);
+  const [clinicError, setClinicError] = useState<string | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -104,22 +110,87 @@ function AuthGate() {
   }, []);
 
   useEffect(() => {
-    if (session === null) fetchClinicName().then(setClinicName).catch(() => {});
-  }, [session]);
+    if (!slug) return;
+    fetchClinicPublic(slug)
+      .then((c) => {
+        setClinic(c);
+        if (c) {
+          applyTheme(c.primaryColor);
+          document.title = c.name;
+        }
+      })
+      .catch((e) => setClinicError(e instanceof Error ? e.message : 'Erro ao carregar a clínica.'));
+    return () => resetTheme();
+  }, [slug]);
 
-  if (session === undefined) {
+  const Spinner = (
+    <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">
+      <Loader2 className="w-6 h-6 animate-spin" />
+    </div>
+  );
+
+  if (clinicError) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-6">
+        <div className="max-w-md bg-slate-900 border border-rose-500/40 rounded-2xl p-6 text-xs text-slate-300">{clinicError}</div>
+      </div>
+    );
+  }
+  if (session === undefined || clinic === undefined) return Spinner;
+
+  // Endereço de uma clínica que não existe
+  if (slug && clinic === null) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-6">
+        <div className="max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-2 text-center">
+          <AlertTriangle className="w-8 h-8 text-amber-400 mx-auto" />
+          <h1 className="text-base font-bold text-white">Clínica não encontrada</h1>
+          <p className="text-xs text-slate-300">Confira o endereço que você recebeu. Não existe uma clínica chamada “{slug}”.</p>
+        </div>
+      </div>
+    );
+  }
+  if (clinic && !clinic.isActive) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-6">
+        <div className="max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-2 text-center">
+          <AlertTriangle className="w-8 h-8 text-amber-400 mx-auto" />
+          <h1 className="text-base font-bold text-white">{clinic.name}</h1>
+          <p className="text-xs text-slate-300">O agendamento online desta clínica está temporariamente indisponível. Entre em contato diretamente.</p>
+          {clinic.phone && <p className="text-xs text-slate-400">{clinic.phone}</p>}
+        </div>
+      </div>
+    );
+  }
+
+  if (session === null) return <AuthScreen clinic={clinic} platform={platformRoute} />;
+
+  // Sem clínica no endereço: só o administrador da plataforma tem o que fazer aqui.
+  if (!clinic) return <PlatformGate />;
+
+  // key = usuário + clínica: trocar de conta remonta o sistema e descarta dados da anterior.
+  return <ClinicApp key={`${session.user.id}:${clinic.id}`} userId={session.user.id} clinic={clinic} />;
+}
+
+function PlatformGate() {
+  const [allowed, setAllowed] = useState<boolean | null>(null);
+  useEffect(() => {
+    isPlatformAdmin().then(setAllowed);
+  }, []);
+  if (allowed === null) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">
         <Loader2 className="w-6 h-6 animate-spin" />
       </div>
     );
   }
-  if (session === null) return <AuthScreen clinicName={clinicName} />;
-  // key = id do usuário: trocar de conta remonta o sistema e descarta dados da conta anterior.
-  return <ClinicApp key={session.user.id} userId={session.user.id} />;
+  return <PlatformAdmin allowed={allowed} />;
 }
 
-function ClinicApp({ userId }: { userId: string }) {
+function ClinicApp({ userId, clinic }: { userId: string; clinic: ClinicBranding }) {
+  const clinicId = clinic.id;
+  const [platformAdmin, setPlatformAdmin] = useState(false);
+  const [showPlatform, setShowPlatform] = useState(false);
   // ---- Dados (todos vêm do Supabase) ----
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [catalog, setCatalog] = useState<Catalog | null>(null);
@@ -149,27 +220,32 @@ function ClinicApp({ userId }: { userId: string }) {
   const loadAll = useCallback(async () => {
     setLoadError(null);
     try {
-      const profile = await fetchProfile(userId);
-      const staff = profile.role !== 'CLIENT';
-      const [cat, appts, busy, notifs, anam] = await Promise.all([
-        fetchCatalog(),
-        fetchAppointments(),
-        fetchBusyBlocks(),
-        fetchNotifications(),
-        staff ? fetchAnamnesisOverview() : fetchMyAnamnesis(userId)
+      // Cria o vínculo com a clínica (cliente, ou o papel do convite) e devolve o papel NESTA clínica.
+      const role = await joinClinic(clinicId);
+      const profile = await fetchProfile(userId, role);
+      const staff = role !== 'CLIENT';
+      const [cat, appts, busy, notifs, anam, plat] = await Promise.all([
+        fetchCatalog(clinicId),
+        fetchAppointments(clinicId),
+        fetchBusyBlocks(clinicId),
+        fetchNotifications(clinicId),
+        staff ? fetchAnamnesisOverview(clinicId) : fetchMyAnamnesis(clinicId, userId),
+        isPlatformAdmin()
       ]);
       setCurrentUser(profile);
       setCatalog(cat);
       setAppointments(appts);
       setBusyBlocks(busy);
       setNotifications(notifs);
+      setPlatformAdmin(plat);
+      applyTheme(cat.settings.primaryColor);
       if (staff) setAnamnesisOverview(anam as AnamnesisOverviewItem[]);
       else setMyAnamnesis(anam as AnamnesisRecord);
       setMainTab((prev) => (staff && prev === 'client-app' ? 'admin-panel' : prev));
     } catch (e) {
       setLoadError(errMsg(e));
     }
-  }, [userId]);
+  }, [userId, clinicId]);
 
   useEffect(() => {
     loadAll();
@@ -186,7 +262,11 @@ function ClinicApp({ userId }: { userId: string }) {
   });
 
   const refreshAgenda = async () => {
-    const [appts, busy, notifs] = await Promise.all([fetchAppointments(), fetchBusyBlocks(), fetchNotifications()]);
+    const [appts, busy, notifs] = await Promise.all([
+      fetchAppointments(clinicId),
+      fetchBusyBlocks(clinicId),
+      fetchNotifications(clinicId)
+    ]);
     setAppointments(appts);
     setBusyBlocks(busy);
     setNotifications(notifs);
@@ -226,6 +306,7 @@ function ClinicApp({ userId }: { userId: string }) {
   }
 
   const { categories, services, leaves, settings } = catalog;
+  const isPlatform = platformAdmin;
   const professionals = catalog.professionals;
 
   // ---- Ações ----
@@ -272,7 +353,7 @@ function ClinicApp({ userId }: { userId: string }) {
   // 4. Anamnese do próprio cliente
   const handleUpdateAnamnesis = async (updated: Partial<AnamnesisRecord>): Promise<boolean> => {
     try {
-      const saved = await saveMyAnamnesis(currentUser.id, { ...myAnamnesis, ...updated, signatureConsent: true });
+      const saved = await saveMyAnamnesis(clinicId, currentUser.id, { ...myAnamnesis, ...updated, signatureConsent: true });
       setMyAnamnesis(saved);
       return true;
     } catch (e) {
@@ -284,8 +365,8 @@ function ClinicApp({ userId }: { userId: string }) {
   // 5. Equipe abre a ficha: o banco registra o acesso (LGPD) e devolve a ficha com a trilha
   const handleOpenAnamnesis = async (clientId: string): Promise<AnamnesisRecord | null> => {
     try {
-      const rec = await openAnamnesisAsStaff(clientId);
-      setAnamnesisOverview(await fetchAnamnesisOverview());
+      const rec = await openAnamnesisAsStaff(clinicId, clientId);
+      setAnamnesisOverview(await fetchAnamnesisOverview(clinicId));
       return rec;
     } catch (e) {
       showToast(errMsg(e));
@@ -306,38 +387,25 @@ function ClinicApp({ userId }: { userId: string }) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `aesthetiq_meus_dados_${currentUser.id}.json`;
+    a.download = `meus_dados_${settings.slug}_${currentUser.id}.json`;
     a.click();
     URL.revokeObjectURL(url);
     showToast('Dados exportados em JSON conforme a LGPD.');
   };
 
-  // 7. Admin: profissional e configurações
-  const handleUpdateProfessional = async (updated: Professional) => {
-    try {
-      await updateProfessional(updated);
-      setCatalog(await fetchCatalog());
-      showToast('Profissional atualizada com sucesso!');
-    } catch (e) {
-      showToast(errMsg(e));
-    }
-  };
-
-  const handleUpdateSettings = async (newSettings: ClinicSettings) => {
-    try {
-      await updateSettings(newSettings);
-      setCatalog(await fetchCatalog());
-      showToast('Configurações da clínica salvas!');
-    } catch (e) {
-      showToast(errMsg(e));
-    }
+  // 7. Admin: depois de qualquer edição do dono (procedimentos, profissionais, marca), recarrega tudo.
+  const reloadCatalog = async () => {
+    const cat = await fetchCatalog(clinicId);
+    setCatalog(cat);
+    applyTheme(cat.settings.primaryColor);
+    document.title = cat.settings.name;
   };
 
   // 8. Notificações: a fila está no banco; aqui só recarregamos o que há nela.
   const handleRefreshNotifications = async () => {
     setIsRefreshingNotifs(true);
     try {
-      setNotifications(await fetchNotifications());
+      setNotifications(await fetchNotifications(clinicId));
     } catch (e) {
       showToast(errMsg(e));
     } finally {
@@ -351,6 +419,8 @@ function ClinicApp({ userId }: { userId: string }) {
     setTimeout(() => setCopiedSql(false), 2000);
   };
 
+  if (showPlatform && isPlatform) return <PlatformAdmin allowed onBack={() => setShowPlatform(false)} />;
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-rose-500 selection:text-white">
       {/* Top Header Global */}
@@ -358,21 +428,16 @@ function ClinicApp({ userId }: { userId: string }) {
         <div className="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
           {/* Logo & Marca da Clínica */}
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-pink-500 via-rose-500 to-indigo-600 flex items-center justify-center text-white shadow-lg shadow-pink-500/20">
-              <Sparkles className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="font-bold text-lg text-white tracking-tight">
-                  {settings.name}
-                </span>
-                <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full font-semibold">
-                  Produção Ativa
-                </span>
+            {settings.logoUrl ? (
+              <img src={settings.logoUrl} alt={settings.name} className="w-10 h-10 rounded-xl object-cover border border-slate-700" />
+            ) : (
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-pink-500 via-rose-500 to-rose-700 flex items-center justify-center text-white shadow-lg shadow-rose-500/20">
+                <Sparkles className="w-5 h-5" />
               </div>
-              <p className="text-[11px] text-slate-400 hidden sm:block">
-                Agendamento Biomédico & Gestão de Cabines
-              </p>
+            )}
+            <div>
+              <span className="font-bold text-lg text-white tracking-tight">{settings.name}</span>
+              {settings.tagline && <p className="text-[11px] text-slate-400 hidden sm:block">{settings.tagline}</p>}
             </div>
           </div>
 
@@ -441,7 +506,17 @@ function ClinicApp({ userId }: { userId: string }) {
               )}
             </button>
 
-            {currentUser.role === 'ADMIN' && (
+            {isPlatform && (
+              <button
+                onClick={() => setShowPlatform(true)}
+                className="px-3.5 py-2 rounded-xl font-semibold transition-all flex items-center gap-2 text-slate-400 hover:text-white hover:bg-slate-800"
+              >
+                <Building2 className="w-4 h-4" />
+                Plataforma (clínicas)
+              </button>
+            )}
+
+            {isPlatform && (
 <button
               onClick={() => setMainTab('concurrency')}
               className={`px-3.5 py-2 rounded-xl font-semibold transition-all flex items-center gap-2 ${
@@ -455,7 +530,7 @@ function ClinicApp({ userId }: { userId: string }) {
             </button>
             )}
 
-            {currentUser.role === 'ADMIN' && (
+            {isPlatform && (
 <button
               onClick={() => setMainTab('blueprint')}
               className={`px-3.5 py-2 rounded-xl font-semibold transition-all flex items-center gap-2 ${
@@ -495,14 +570,17 @@ function ClinicApp({ userId }: { userId: string }) {
         {mainTab === 'admin-panel' && isStaff && (
           <AdminView
             currentUser={currentUser}
+            clinicId={clinicId}
             appointments={appointments}
+            categories={categories}
             professionals={professionals}
             services={services}
+            leaves={leaves}
             settings={settings}
             anamnesisOverview={anamnesisOverview}
             onUpdateStatus={handleUpdateStatus}
-            onUpdateProfessional={handleUpdateProfessional}
-            onUpdateSettings={handleUpdateSettings}
+            onCatalogChanged={reloadCatalog}
+            notify={showToast}
             onOpenAnamnesis={handleOpenAnamnesis}
           />
         )}
@@ -515,9 +593,9 @@ function ClinicApp({ userId }: { userId: string }) {
           />
         )}
 
-        {mainTab === 'concurrency' && currentUser.role === 'ADMIN' && <ConcurrencySimulator />}
+        {mainTab === 'concurrency' && isPlatform && <ConcurrencySimulator />}
 
-        {mainTab === 'blueprint' && currentUser.role === 'ADMIN' && (
+        {mainTab === 'blueprint' && isPlatform && (
           <div className="space-y-6">
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
               <div>
@@ -555,7 +633,9 @@ function ClinicApp({ userId }: { userId: string }) {
 
       {/* Footer */}
       <footer className="border-t border-slate-800 bg-slate-900/60 py-4 text-center text-xs text-slate-500">
-        {settings.name} • Sistema de Agendamento Estético • Arquitetura Supabase + FastAPI Serverless + Vercel
+        {settings.name}
+        {settings.address && <> • {settings.address}</>}
+        {settings.phone && <> • {settings.phone}</>}
       </footer>
     </div>
   );
