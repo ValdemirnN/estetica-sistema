@@ -158,21 +158,21 @@ export interface Catalog {
 }
 
 export async function fetchCatalog(clinicId: string): Promise<Catalog> {
-  const [cats, svcs, pros, leaves, clinic] = await Promise.all([
+  const [cats, svcs, pros, leaves, clinic, whours, pservices] = await Promise.all([
     supabase.from('service_categories').select('*').eq('clinic_id', clinicId).order('display_order').order('name'),
     supabase.from('services').select('*').eq('clinic_id', clinicId).order('name'),
-    supabase
-      .from('professionals')
-      .select('*, professional_working_hours!fk_whours_professional_clinic(*), professional_services!fk_pservices_professional_clinic(service_id)')
-      .eq('clinic_id', clinicId)
-      .order('name'),
+    supabase.from('professionals').select('*').eq('clinic_id', clinicId).order('name'),
     supabase
       .from('professional_leaves')
       .select('*')
       .eq('clinic_id', clinicId)
       .gte('end_datetime', new Date().toISOString())
       .order('start_datetime'),
-    supabase.from('clinics').select('*').eq('id', clinicId).maybeSingle()
+    supabase.from('clinics').select('*').eq('id', clinicId).maybeSingle(),
+    // Jornada e especialidades vêm em consultas separadas (sem embed do PostgREST),
+    // pois professionals <-> essas tabelas têm mais de uma FK e o embed fica ambíguo.
+    supabase.from('professional_working_hours').select('*').eq('clinic_id', clinicId),
+    supabase.from('professional_services').select('professional_id, service_id').eq('clinic_id', clinicId)
   ]);
 
   if (cats.error) fail(cats.error, 'Categorias');
@@ -180,6 +180,21 @@ export async function fetchCatalog(clinicId: string): Promise<Catalog> {
   if (pros.error) fail(pros.error, 'Profissionais');
   if (leaves.error) fail(leaves.error, 'Ausências');
   if (clinic.error) fail(clinic.error, 'Clínica');
+  if (whours.error) fail(whours.error, 'Jornadas');
+  if (pservices.error) fail(pservices.error, 'Especialidades');
+
+  const hoursByPro = new Map<string, any[]>();
+  for (const w of whours.data ?? []) {
+    const list = hoursByPro.get(w.professional_id) ?? [];
+    list.push(w);
+    hoursByPro.set(w.professional_id, list);
+  }
+  const servicesByPro = new Map<string, string[]>();
+  for (const ps of pservices.data ?? []) {
+    const list = servicesByPro.get(ps.professional_id) ?? [];
+    list.push(ps.service_id);
+    servicesByPro.set(ps.professional_id, list);
+  }
   if (!clinic.data) {
     throw new ApiError('Clínica não encontrada ou sem acesso. Aplique a migration 20261117000100_multi_clinic.sql.');
   }
@@ -224,8 +239,8 @@ export async function fetchCatalog(clinicId: string): Promise<Catalog> {
         intervalBufferMinutes: p.interval_buffer_minutes,
         isAvailableForAutoAssign: p.is_available_for_auto_assign,
         isActive: p.is_active,
-        specialtyServiceIds: (p.professional_services ?? []).map((x: { service_id: string }) => x.service_id),
-        workingHours: (p.professional_working_hours ?? []).map(
+        specialtyServiceIds: servicesByPro.get(p.id) ?? [],
+        workingHours: (hoursByPro.get(p.id) ?? []).map(
           (w: any): WorkingHours => ({
             dayOfWeek: DAY_FROM_DB[w.day_of_week],
             startTime: hhmm(w.start_time)!,
