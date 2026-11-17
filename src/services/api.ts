@@ -163,7 +163,7 @@ export async function fetchCatalog(clinicId: string): Promise<Catalog> {
     supabase.from('services').select('*').eq('clinic_id', clinicId).order('name'),
     supabase
       .from('professionals')
-      .select('*, professional_working_hours(*), professional_services(service_id)')
+      .select('*, professional_working_hours!fk_whours_professional_clinic(*), professional_services!fk_pservices_professional_clinic(service_id)')
       .eq('clinic_id', clinicId)
       .order('name'),
     supabase
