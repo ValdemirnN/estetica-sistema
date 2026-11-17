@@ -12,13 +12,26 @@ import {
   ShieldCheck
 } from 'lucide-react';
 
+interface NotificationSample {
+  clientName: string;
+  serviceName: string;
+  professionalName: string;
+  startTime: string;
+}
+
 interface NotificationsViewProps {
+  sample?: NotificationSample | null;
+  clinicName?: string;
+  clinicAddress?: string;
   notifications: NotificationLog[];
   onRefresh: () => void;
   isRefreshing: boolean;
 }
 
 export function NotificationsView({
+  sample = null,
+  clinicName = '',
+  clinicAddress = '',
   notifications,
   onRefresh,
   isRefreshing
@@ -35,7 +48,7 @@ export function NotificationsView({
             <span className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
               <MessageSquare className="w-4 h-4" />
             </span>
-            <h2 className="text-base font-bold text-white">Central de Notificações & Lembretes</h2>
+            <h2 className="text-base font-bold text-white">Central de Comunicação</h2>
           </div>
           <p className="text-xs text-slate-400 max-w-2xl leading-relaxed">
             Envios transacionais automáticos via <strong>Meta Cloud API (WhatsApp Oficial)</strong> com templates pré-homologados (sem risco de banimento) e fallback imediato por e-mail via <strong>Resend</strong>.
@@ -68,7 +81,7 @@ export function NotificationsView({
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
           <span className="text-xs text-slate-400 block mb-1">Entregues com Sucesso:</span>
           <span className="text-2xl font-bold font-mono text-emerald-400">{sentCount}</span>
-          <p className="text-[11px] text-slate-500 mt-1">Taxa de abertura superior a 94%</p>
+          <p className="text-[11px] text-slate-500 mt-1">{notifications.length > 0 ? `${Math.round((sentCount / notifications.length) * 100)}% do total de envios` : 'Nenhum envio ainda'}</p>
         </div>
 
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
@@ -80,7 +93,7 @@ export function NotificationsView({
         </div>
       </div>
 
-      {/* Mock do Template do WhatsApp */}
+      {/* Prévia com dados do próximo agendamento */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3">
           <h3 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
@@ -88,21 +101,38 @@ export function NotificationsView({
           </h3>
           <div className="bg-emerald-950/30 border border-emerald-500/30 rounded-xl p-4 text-xs text-slate-200 font-sans space-y-2 relative shadow-inner">
             <div className="text-[10px] text-emerald-400 font-mono">Template: appointment_reminder_24h</div>
-            <p>
-              Olá, <strong>Juliana</strong>! ✨
-            </p>
-            <p className="text-slate-300">
-              Passando para lembrar do seu atendimento na <strong>sua clínica</strong> amanhã:
-            </p>
-            <div className="bg-slate-950/80 p-2.5 rounded-lg border border-slate-800 space-y-1 text-[11px]">
-              <div>Procedimento: <strong>Limpeza de Pele Profunda</strong></div>
-              <div>Data: <strong>Amanhã às 10:00</strong></div>
-              <div>Profissional: <strong>Dra. Camila Vasconcellos</strong></div>
-              <div>Local: <strong>Av. Paulista, 1842 - Conj. 91</strong></div>
-            </div>
-            <p className="text-[11px] text-slate-400">
-              Se precisar remarcar, solicitamos antecedência de 24 horas pelo nosso aplicativo.
-            </p>
+            {sample ? (
+              <>
+                <p>
+                  Olá, <strong>{sample.clientName.split(' ')[0]}</strong>! ✨
+                </p>
+                <p className="text-slate-300">
+                  Passando para lembrar do seu atendimento{clinicName && <> na <strong>{clinicName}</strong></>}:
+                </p>
+                <div className="bg-slate-950/80 p-2.5 rounded-lg border border-slate-800 space-y-1 text-[11px]">
+                  <div>Procedimento: <strong>{sample.serviceName}</strong></div>
+                  <div>
+                    Data:{' '}
+                    <strong>
+                      {new Date(sample.startTime).toLocaleString('pt-BR', {
+                        timeZone: 'America/Sao_Paulo',
+                        day: '2-digit',
+                        month: '2-digit',
+                        year: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })}
+                    </strong>
+                  </div>
+                  <div>Profissional: <strong>{sample.professionalName}</strong></div>
+                  {clinicAddress && <div>Local: <strong>{clinicAddress}</strong></div>}
+                </div>
+              </>
+            ) : (
+              <p className="text-slate-400 text-[11px]">
+                A prévia aparece aqui assim que houver um agendamento confirmado futuro.
+              </p>
+            )}
           </div>
         </div>
 
