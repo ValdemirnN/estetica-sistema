@@ -54,6 +54,11 @@ export function ClientDashboard({
     return appointments.filter((a) => a.clientId === currentUser.id);
   }, [appointments, currentUser.id]);
 
+  const futureCount = useMemo(() => {
+    const now = new Date();
+    return clientApts.filter((a) => a.status === 'CONFIRMED' && new Date(a.startTime) >= now).length;
+  }, [clientApts]);
+
   const upcomingApt = useMemo(() => {
     const now = new Date();
     return clientApts
@@ -160,7 +165,7 @@ export function ClientDashboard({
           <div className="text-2xl font-bold font-mono text-white">
             {completedApts.length} procedimentos
           </div>
-          <p className="text-[11px] text-slate-400">Registrados no seu prontuário</p>
+          <p className="text-[11px] text-slate-400">Atendimentos concluídos</p>
         </div>
 
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-2">
@@ -178,15 +183,17 @@ export function ClientDashboard({
 
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-2">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-400">Nível Fidelidade</span>
+            <span className="text-xs font-semibold text-slate-400">Próximos Agendamentos</span>
             <span className="p-2 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
               <Award className="w-4 h-4" />
             </span>
           </div>
-          <div className="text-xl font-bold font-mono text-amber-300">
-            Cliente Gold VIP
+          <div className="text-2xl font-bold font-mono text-amber-300">
+            {futureCount} {futureCount === 1 ? 'agendamento' : 'agendamentos'}
           </div>
-          <p className="text-[11px] text-slate-400">380 pontos de benefícios</p>
+          <p className="text-[11px] text-slate-400">
+            {futureCount === 0 ? 'Nenhum horário reservado' : 'Já reservados para você'}
+          </p>
         </div>
 
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-2">
