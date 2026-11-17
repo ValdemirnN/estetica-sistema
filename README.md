@@ -3,7 +3,8 @@
 Sistema de agendamento online de alta performance para clínica de estética com:
 - Trava definitiva de concorrência e **prevenção de double-booking** no banco via PostgreSQL `btree_gist` (`EXCLUDE USING gist`);
 - **Row Level Security (RLS)** ativo em 100% das tabelas (Clientes só acessam os próprios dados; Staff e Admin gerenciam a clínica);
-- Prontuário médico com **anamnese auditada** conforme a **LGPD (Lei 13.709/2018 - Dados Sensíveis de Saúde)**;
+- **Sem prontuário**: o sistema guarda só o cadastro básico do cliente (nome, contato, CPF/nascimento opcionais) e o agendamento, conforme a **LGPD (Lei 13.709/2018)**; nenhum dado de saúde;
+- **Agenda da equipe** por dia/semana/mês, com filtro por profissional, remarcação, repetição semanal, troca de situação e lembrete por WhatsApp;
 - Fila de notificações transacionais com **Meta WhatsApp Cloud API Oficial** e fallback via e-mail (**Resend**);
 - Dashboards com **Recharts** com controle de privacidade (Faturamento financeiro restrito ao Dono/Admin e métricas de autocuidado para o cliente).
 
@@ -48,15 +49,17 @@ Para uma instalação de uma clínica só, use `VITE_DEFAULT_CLINIC_SLUG`.
 6. **Auth:** em produção mantenha *Confirm email* **ligado** (Authentication → Providers → Email): convites de dono/equipe só valem para e-mail confirmado. Adicione as URLs das clínicas em *Authentication → URL Configuration → Redirect URLs* (ou o padrão coringa do seu domínio).
 
 ### Como funciona a segurança
-- Clientes só leem os **próprios** agendamentos e anamnese (RLS). Os horários ocupados chegam por `get_busy_slots`, sem dados pessoais.
+- Clientes só leem os **próprios** agendamentos (RLS). Os horários ocupados chegam por `get_busy_slots`, sem dados pessoais.
 - Agendar, cancelar e mudar status são funções do banco (`book_appointment`, `cancel_my_appointment`, `update_appointment_status`): preço, duração, jornada, ausências e antecedência mínima são validados lá, e o conflito de horário é garantido pela `EXCLUDE` constraint.
-- A equipe abre a anamnese por `staff_view_anamnesis`, que **registra o acesso** no log de auditoria automaticamente.
+- A equipe remarca por `reschedule_appointment` (mesmas validações de `book_appointment` e mesma trava `EXCLUDE`) e lista clientes por `staff_list_clients`. Observações internas ficam em `clinic_client_notes`, sem acesso direto do navegador.
+- Criar a conta de um cliente exige a chave `service_role`, que **nunca** vai ao navegador: isso é feito pela rota serverless `/api/admin/create-client`, que confere se quem chama é ADMIN/RECEPTIONIST da clínica.
 
 ### Limitações conhecidas
 - Fuso fixo em America/Sao_Paulo para todas as clínicas.
 - A tela "Meu Dashboard" do cliente ainda mostra dados ilustrativos (gráficos e "Nível Gold VIP"), herdados do protótipo.
 - `supabase_schema.sql` na raiz é o schema inicial antigo (sem multi-clínica); use as migrations.
-- As notificações são **gravadas na fila** (`notifications_log`), mas nada as envia ainda: falta um worker (ex.: Edge Function agendada) ligado ao WhatsApp Cloud API / Resend.
+- O envio automático de **WhatsApp** ainda não existe: a fila grava os avisos e `/api/notify/reminders` envia por **e-mail** (Resend); avisos de WhatsApp caem para e-mail quando o cliente aceitou e-mail. A equipe também pode usar o botão “Lembrete” da agenda (abre o WhatsApp com a mensagem pronta).
+- O cron padrão em `vercel.json` roda **1x por dia** (limite do plano gratuito da Vercel). Para lembretes mais pontuais, use o plano Pro ou chame a rota a cada 10–15 min por um agendador externo.
 
 ---
 
@@ -98,7 +101,7 @@ npx supabase db push
 1. `profiles`: Perfis vinculados automaticamente ao `auth.users` via trigger, com roles (`CLIENT`, `PROFESSIONAL`, `RECEPTIONIST`, `ADMIN`) e termos LGPD.
 2. `professionals`: Registro profissional (CRBM/COREN), cor na agenda e **buffer de higienização** pós-atendimento.
 3. `service_categories`: Categorias (Facial, Injetáveis, Corporal, Laser).
-4. `services`: Procedimentos com duração em minutos, preço em centavos e flag se exige anamnese.
+4. `services`: Procedimentos com duração em minutos, preço em centavos (sem flag de anamnese).
 5. `professional_services`: Vínculo N:N de especialidades.
 6. `professional_working_hours`: Jornada de trabalho semanal e horário de almoço.
 7. `professional_leaves`: Ausências, atestados e férias que bloqueiam a grade.
@@ -109,6 +112,25 @@ npx supabase db push
        tsrange(start_time, buffer_end_time, '[)') WITH &&
    ) WHERE (status IN ('PENDING', 'CONFIRMED'))
    ```
-9. `anamnesis_records`: Ficha de saúde com alergias, medicamentos, gestação e marcapasso.
-10. `anamnesis_access_logs`: Trilha de auditoria obrigatória da LGPD (quem acessou, quando, IP e ação).
-11. `notifications_log`: Fila de disparo de WhatsApp e E-mail.
+9. `clinic_client_notes`: Observação interna da equipe sobre o cliente (sem acesso direto; só por funções).
+10. `notifications_log`: Fila de disparo de WhatsApp e E-mail.
+
+---
+
+## 🆕 Sem prontuário + agenda da equipe + cadastro de clientes
+
+**Ordem das migrations** (SQL Editor ou `supabase db push`): `20261104000100` → `20261116000100` → `20261117000100` → **`20261118000100_sem_prontuario_agenda_clientes.sql`**.
+A última **apaga** `anamnesis_records`, `anamnesis_access_logs`, as funções de anamnese e a coluna `services.requires_anamnesis`. Exporte antes se precisar das fichas.
+
+**Rotas serverless (`/api`, Vercel):**
+| Rota | Para que serve |
+|---|---|
+| `POST /api/admin/create-client` | Equipe cadastra cliente: cria a conta com senha provisória (o cliente troca no primeiro acesso) e vincula à clínica. |
+| `GET/POST /api/notify/reminders` | Worker da fila: envia por e-mail (Resend) o que está `QUEUED`. Exige `Authorization: Bearer $CRON_SECRET`. |
+
+Variáveis só do servidor (Vercel → Environment Variables; veja `.env.example`): `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `CRON_SECRET`, `RESEND_API_KEY`, `EMAIL_FROM`.
+Em `npm run dev` as rotas `/api` não existem; use `vercel dev` para testá-las.
+
+**Sobreposição:** o banco não aceita dois atendimentos sobrepostos da mesma profissional (`EXCLUDE`), então não há “encaixe” sobreposto. A duração segue a do procedimento.
+
+**Testes do banco:** `supabase/tests/sem_prontuario_agenda_test.sql` (rode depois das migrations, como descrito em `supabase/tests/README.md`).

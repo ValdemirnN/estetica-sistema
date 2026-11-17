@@ -22,7 +22,6 @@ const emptyService = (categoryId: string, professionals: Professional[]): Servic
   durationMinutes: 60,
   priceCents: 0,
   recoveryInfo: '',
-  requiresAnamnesis: false,
   badge: '',
   imageUrl: '',
   isActive: true,
@@ -54,7 +53,6 @@ export function ServicesManager({ clinicId, categories, services, professionals,
       durationMinutes: s.durationMinutes,
       priceCents: s.priceCents,
       recoveryInfo: s.recoveryInfo,
-      requiresAnamnesis: s.requiresAnamnesis,
       badge: s.badge ?? '',
       imageUrl: s.imageUrl ?? '',
       isActive: s.isActive,
@@ -111,7 +109,6 @@ export function ServicesManager({ clinicId, categories, services, professionals,
         durationMinutes: s.durationMinutes,
         priceCents: s.priceCents,
         recoveryInfo: s.recoveryInfo,
-        requiresAnamnesis: s.requiresAnamnesis,
         badge: s.badge ?? '',
         imageUrl: s.imageUrl ?? '',
         isActive: !s.isActive,
@@ -397,12 +394,6 @@ export function ServicesManager({ clinicId, categories, services, professionals,
           />
 
           <div className="space-y-3 border-t border-slate-800 pt-4">
-            <Toggle
-              checked={serviceForm.requiresAnamnesis}
-              onChange={(v) => setServiceForm({ ...serviceForm, requiresAnamnesis: v })}
-              label="Exige ficha de anamnese"
-              hint="O cliente precisa preencher a ficha de saúde antes de confirmar."
-            />
             <Toggle
               checked={serviceForm.isActive}
               onChange={(v) => setServiceForm({ ...serviceForm, isActive: v })}

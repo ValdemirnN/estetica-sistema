@@ -6,55 +6,50 @@ import {
   Catalog,
   bookAppointment,
   cancelMyAppointment,
-  emptyAnamnesis,
-  fetchAnamnesisOverview,
+  createClientAsStaff,
   fetchAppointments,
   fetchBusyBlocks,
   fetchCatalog,
+  fetchClients,
   fetchClinicPublic,
-  fetchMyAnamnesis,
   fetchNotifications,
   fetchProfile,
   isPlatformAdmin,
   joinClinic,
-  openAnamnesisAsStaff,
-  saveMyAnamnesis,
+  rescheduleAppointment,
+  saveClientNotes,
   signOut,
   updateAppointmentStatus,
-  BookingInput
+  BookingInput,
+  NewClientInput
 } from './services/api';
 import {
   Appointment,
-  AnamnesisOverviewItem,
-  AnamnesisRecord,
   AppointmentStatus,
   BusyBlock,
+  ClientRecord,
   ClinicBranding,
   NotificationLog,
   UserProfile,
   UserRole
 } from './types/clinic';
-import { ClientView } from './components/ClientView';
-import { AdminView } from './components/AdminView';
+import { ClientView } from './components/client/ClientView';
+import { AdminView } from './components/admin/AdminView';
 import { NotificationsView } from './components/NotificationsView';
-import { ConcurrencySimulator } from './components/ConcurrencySimulator';
-import { AuthScreen } from './components/AuthScreen';
+import { AuthScreen } from './components/auth/AuthScreen';
+import { FirstAccessPasswordModal } from './components/auth/FirstAccessPasswordModal';
+import type { SeriesResult } from './components/clinic/NewAppointmentModal';
 import { PlatformAdmin } from './components/PlatformAdmin';
 import { applyTheme, resetTheme } from './lib/theme';
 import { isPlatformRoute, resolveClinicSlug } from './lib/tenant';
-import { FULL_SQL_SCHEMA } from './mock/sqlSchema';
 import {
   Sparkles,
   Calendar,
   Bell,
-  Database,
-  Zap,
   CheckCircle2,
   AlertTriangle,
   Loader2,
   LogOut,
-  Copy,
-  Check,
   Smartphone,
   Building2
 } from 'lucide-react';
@@ -66,7 +61,7 @@ const ROLE_LABEL: Record<UserRole, string> = {
   ADMIN: 'Gestão / Admin'
 };
 
-type MainTab = 'client-app' | 'admin-panel' | 'notifications' | 'concurrency' | 'blueprint';
+type MainTab = 'client-app' | 'admin-panel' | 'notifications';
 
 /** Tela mostrada quando as variáveis do Supabase não foram configuradas. */
 function MissingConfig() {
@@ -169,7 +164,15 @@ function AuthGate() {
   if (!clinic) return <PlatformGate />;
 
   // key = usuário + clínica: trocar de conta remonta o sistema e descarta dados da anterior.
-  return <ClinicApp key={`${session.user.id}:${clinic.id}`} userId={session.user.id} clinic={clinic} />;
+  return (
+    <>
+      <ClinicApp key={`${session.user.id}:${clinic.id}`} userId={session.user.id} clinic={clinic} />
+      {/* Cliente cadastrado pela equipe entra com senha provisória e precisa trocá-la. */}
+      {session.user.user_metadata?.must_change_password === true && (
+        <FirstAccessPasswordModal onDone={() => {}} onSignOut={() => signOut()} />
+      )}
+    </>
+  );
 }
 
 function PlatformGate() {
@@ -197,14 +200,12 @@ function ClinicApp({ userId, clinic }: { userId: string; clinic: ClinicBranding 
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [busyBlocks, setBusyBlocks] = useState<BusyBlock[]>([]);
   const [notifications, setNotifications] = useState<NotificationLog[]>([]);
-  const [myAnamnesis, setMyAnamnesis] = useState<AnamnesisRecord>(() => emptyAnamnesis(userId));
-  const [anamnesisOverview, setAnamnesisOverview] = useState<AnamnesisOverviewItem[]>([]);
+  const [clients, setClients] = useState<ClientRecord[]>([]);
 
   const [loadError, setLoadError] = useState<string | null>(null);
   const [mainTab, setMainTab] = useState<MainTab>('client-app');
   const [isRefreshingNotifs, setIsRefreshingNotifs] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [copiedSql, setCopiedSql] = useState(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const isStaff = !!currentUser && currentUser.role !== 'CLIENT';
@@ -224,12 +225,12 @@ function ClinicApp({ userId, clinic }: { userId: string; clinic: ClinicBranding 
       const role = await joinClinic(clinicId);
       const profile = await fetchProfile(userId, role);
       const staff = role !== 'CLIENT';
-      const [cat, appts, busy, notifs, anam, plat] = await Promise.all([
+      const [cat, appts, busy, notifs, clientList, plat] = await Promise.all([
         fetchCatalog(clinicId),
         fetchAppointments(clinicId),
         fetchBusyBlocks(clinicId),
         fetchNotifications(clinicId),
-        staff ? fetchAnamnesisOverview(clinicId) : fetchMyAnamnesis(clinicId, userId),
+        staff ? fetchClients(clinicId) : Promise.resolve([] as ClientRecord[]),
         isPlatformAdmin()
       ]);
       setCurrentUser(profile);
@@ -239,8 +240,7 @@ function ClinicApp({ userId, clinic }: { userId: string; clinic: ClinicBranding 
       setNotifications(notifs);
       setPlatformAdmin(plat);
       applyTheme(cat.settings.primaryColor);
-      if (staff) setAnamnesisOverview(anam as AnamnesisOverviewItem[]);
-      else setMyAnamnesis(anam as AnamnesisRecord);
+      setClients(clientList);
       setMainTab((prev) => (staff && prev === 'client-app' ? 'admin-panel' : prev));
     } catch (e) {
       setLoadError(errMsg(e));
@@ -350,28 +350,48 @@ function ClinicApp({ userId, clinic }: { userId: string; clinic: ClinicBranding 
     }
   };
 
-  // 4. Anamnese do próprio cliente
-  const handleUpdateAnamnesis = async (updated: Partial<AnamnesisRecord>): Promise<boolean> => {
+  // 4. Equipe agenda para um cliente (uma vez ou repetindo toda semana).
+  //    Cada horário é validado no banco; os que falham são devolvidos para a equipe ver o motivo.
+  const handleBookSeries = async (inputs: BookingInput[], labels: string[]): Promise<SeriesResult> => {
+    let booked = 0;
+    const failures: string[] = [];
+    for (let i = 0; i < inputs.length; i++) {
+      try {
+        await bookAppointment(inputs[i]);
+        booked++;
+      } catch (e) {
+        failures.push(`${labels[i]}: ${errMsg(e)}`);
+      }
+    }
+    await refreshAgenda().catch(() => {});
+    if (booked > 0) showToast(booked === 1 ? 'Agendamento confirmado.' : `${booked} agendamentos confirmados.`);
+    return { booked, failures };
+  };
+
+  // 5. Equipe remarca
+  const handleReschedule = async (aptId: string, startIso: string, professionalId: string | null): Promise<boolean> => {
     try {
-      const saved = await saveMyAnamnesis(clinicId, currentUser.id, { ...myAnamnesis, ...updated, signatureConsent: true });
-      setMyAnamnesis(saved);
+      await rescheduleAppointment(aptId, startIso, professionalId);
+      await refreshAgenda();
+      showToast('Agendamento remarcado. O cliente será avisado pela fila de notificações.');
       return true;
     } catch (e) {
+      if (e instanceof ApiError && e.code === '23P01') await refreshAgenda().catch(() => {});
       showToast(errMsg(e));
       return false;
     }
   };
 
-  // 5. Equipe abre a ficha: o banco registra o acesso (LGPD) e devolve a ficha com a trilha
-  const handleOpenAnamnesis = async (clientId: string): Promise<AnamnesisRecord | null> => {
-    try {
-      const rec = await openAnamnesisAsStaff(clinicId, clientId);
-      setAnamnesisOverview(await fetchAnamnesisOverview(clinicId));
-      return rec;
-    } catch (e) {
-      showToast(errMsg(e));
-      return null;
-    }
+  // 5b. Equipe cadastra cliente (a conta é criada pela rota serverless) e recarrega a lista
+  const handleCreateClient = async (input: NewClientInput) => {
+    const r = await createClientAsStaff(clinicId, input);
+    setClients(await fetchClients(clinicId));
+    return r;
+  };
+
+  const handleSaveClientNotes = async (clientId: string, notes: string) => {
+    await saveClientNotes(clinicId, clientId, notes);
+    setClients(await fetchClients(clinicId));
   };
 
   // 6. Exportação de dados (LGPD, art. 18)
@@ -379,7 +399,6 @@ function ClinicApp({ userId, clinic }: { userId: string; clinic: ClinicBranding 
     const data = {
       perfil: currentUser,
       agendamentos: appointments.filter((a) => a.clientId === currentUser.id),
-      anamnese: myAnamnesis,
       dataExportacao: new Date().toISOString(),
       avisoLegal: 'Exportação em conformidade com o Artigo 18 da LGPD (Portabilidade de Dados Pessoais).'
     };
@@ -411,12 +430,6 @@ function ClinicApp({ userId, clinic }: { userId: string; clinic: ClinicBranding 
     } finally {
       setIsRefreshingNotifs(false);
     }
-  };
-
-  const copySqlCode = () => {
-    navigator.clipboard.writeText(FULL_SQL_SCHEMA);
-    setCopiedSql(true);
-    setTimeout(() => setCopiedSql(false), 2000);
   };
 
   if (showPlatform && isPlatform) return <PlatformAdmin allowed onBack={() => setShowPlatform(false)} />;
@@ -516,33 +529,6 @@ function ClinicApp({ userId, clinic }: { userId: string; clinic: ClinicBranding 
               </button>
             )}
 
-            {isPlatform && (
-<button
-              onClick={() => setMainTab('concurrency')}
-              className={`px-3.5 py-2 rounded-xl font-semibold transition-all flex items-center gap-2 ${
-                mainTab === 'concurrency'
-                  ? 'bg-rose-600 text-white shadow-md shadow-rose-600/30'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
-              }`}
-            >
-              <Zap className="w-4 h-4" />
-              Teste Concorrência (btree_gist)
-            </button>
-            )}
-
-            {isPlatform && (
-<button
-              onClick={() => setMainTab('blueprint')}
-              className={`px-3.5 py-2 rounded-xl font-semibold transition-all flex items-center gap-2 ${
-                mainTab === 'blueprint'
-                  ? 'bg-rose-600 text-white shadow-md shadow-rose-600/30'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
-              }`}
-            >
-              <Database className="w-4 h-4" />
-              Schema & SQL Produção
-            </button>
-            )}
           </div>
         </div>
       </div>
@@ -558,11 +544,9 @@ function ClinicApp({ userId, clinic }: { userId: string; clinic: ClinicBranding 
             appointments={appointments}
             busyBlocks={busyBlocks}
             leaves={leaves}
-            anamnesis={myAnamnesis}
             settings={settings}
             onBookAppointment={handleBookAppointment}
             onCancelAppointment={handleCancelAppointment}
-            onUpdateAnamnesis={handleUpdateAnamnesis}
             onExportData={handleExportData}
           />
         )}
@@ -577,11 +561,15 @@ function ClinicApp({ userId, clinic }: { userId: string; clinic: ClinicBranding 
             services={services}
             leaves={leaves}
             settings={settings}
-            anamnesisOverview={anamnesisOverview}
+            clients={clients}
+            busyBlocks={busyBlocks}
             onUpdateStatus={handleUpdateStatus}
             onCatalogChanged={reloadCatalog}
             notify={showToast}
-            onOpenAnamnesis={handleOpenAnamnesis}
+            onBookSeries={handleBookSeries}
+            onReschedule={handleReschedule}
+            onCreateClient={handleCreateClient}
+            onSaveClientNotes={handleSaveClientNotes}
           />
         )}
 
@@ -593,34 +581,6 @@ function ClinicApp({ userId, clinic }: { userId: string; clinic: ClinicBranding 
           />
         )}
 
-        {mainTab === 'concurrency' && isPlatform && <ConcurrencySimulator />}
-
-        {mainTab === 'blueprint' && isPlatform && (
-          <div className="space-y-6">
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <div>
-                <h3 className="text-base font-bold text-white flex items-center gap-2">
-                  <Database className="w-5 h-5 text-indigo-400" />
-                  Script SQL DDL de Produção (Pronto para Supabase)
-                </h3>
-                <p className="text-xs text-slate-300 mt-1 max-w-2xl leading-relaxed">
-                  Contém a extensão <code className="text-rose-300">btree_gist</code>, constraints de exclusão para eliminação de double booking, tipos enum, triggers de <code className="text-rose-300">updated_at</code> e estrutura LGPD para auditoria.
-                </p>
-              </div>
-              <button
-                onClick={copySqlCode}
-                className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-md shadow-indigo-600/30 transition-all flex items-center gap-2 shrink-0 self-start md:self-auto"
-              >
-                {copiedSql ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                {copiedSql ? 'SQL Copiado!' : 'Copiar Script Completo'}
-              </button>
-            </div>
-
-            <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 font-mono text-xs text-slate-300 max-h-[550px] overflow-y-auto leading-relaxed">
-              <pre>{FULL_SQL_SCHEMA}</pre>
-            </div>
-          </div>
-        )}
       </main>
 
       {/* Floating Toast Feedback */}

@@ -1,8 +1,6 @@
 import { supabase } from '../lib/supabase';
 import {
-  AnamnesisAccessLog,
-  AnamnesisOverviewItem,
-  AnamnesisRecord,
+  ClientRecord,
   Appointment,
   AppointmentStatus,
   BusyBlock,
@@ -208,7 +206,6 @@ export async function fetchCatalog(clinicId: string): Promise<Catalog> {
         durationMinutes: s.duration_minutes,
         priceCents: s.price_cents,
         recoveryInfo: s.recovery_info ?? '',
-        requiresAnamnesis: s.requires_anamnesis,
         imageUrl: s.image_url ?? undefined,
         badge: s.badge ?? undefined,
         isActive: s.is_active
@@ -394,7 +391,6 @@ export interface ServiceInput {
   durationMinutes: number;
   priceCents: number;
   recoveryInfo: string;
-  requiresAnamnesis: boolean;
   badge: string;
   imageUrl: string;
   isActive: boolean;
@@ -438,7 +434,6 @@ export async function saveService(clinicId: string, s: ServiceInput): Promise<vo
     duration_minutes: s.durationMinutes,
     price_cents: s.priceCents,
     recovery_info: s.recoveryInfo.trim() || null,
-    requires_anamnesis: s.requiresAnamnesis,
     badge: s.badge.trim() || null,
     image_url: s.imageUrl || null,
     is_active: s.isActive
@@ -815,107 +810,102 @@ export async function updateAppointmentStatus(
   if (error) fail(error, 'Status');
 }
 
+/** Equipe remarca um agendamento (data/horário e, opcionalmente, outra profissional). O banco valida jornada, ausência e conflito. */
+export async function rescheduleAppointment(
+  appointmentId: string,
+  startIso: string,
+  professionalId: string | null
+): Promise<void> {
+  const { error } = await supabase.rpc('reschedule_appointment', {
+    p_appointment_id: appointmentId,
+    p_start_time: startIso,
+    p_professional_id: professionalId
+  });
+  if (error) fail(error, 'Remarcação');
+}
+
 // ---------------------------------------------------------------------------
-// Anamnese (dados sensíveis — LGPD)
+// Clientes (cadastro básico, sem dados de saúde)
 // ---------------------------------------------------------------------------
 
-export function emptyAnamnesis(clientId: string): AnamnesisRecord {
-  const now = new Date().toISOString();
-  return {
-    id: '',
-    clientId,
-    allergies: '',
-    skinType: '',
-    medicalConditions: '',
-    currentMedications: '',
-    pregnantOrLactating: false,
-    hasPacemakerOrImplants: false,
-    previousReactions: '',
-    filledAt: now,
-    updatedAt: now,
-    signatureConsent: false,
-    accessLogs: []
-  };
+/** Equipe: lista os clientes da clínica. */
+export async function fetchClients(clinicId: string): Promise<ClientRecord[]> {
+  const { data, error } = await supabase.rpc('staff_list_clients', { p_clinic_id: clinicId });
+  if (error) fail(error, 'Clientes');
+  return (data ?? []).map(
+    (r: any): ClientRecord => ({
+      id: r.client_id,
+      fullName: r.full_name,
+      phone: r.phone ?? '',
+      email: r.email ?? '',
+      cpf: r.cpf ?? undefined,
+      birthDate: r.birth_date ?? undefined,
+      isActive: r.is_active,
+      createdAt: r.created_at,
+      staffNotes: r.staff_notes ?? ''
+    })
+  );
 }
 
-function mapAnamnesis(r: any, logs: any[] = []): AnamnesisRecord {
-  return {
-    id: r.id,
-    clientId: r.client_id,
-    allergies: r.allergies ?? '',
-    skinType: r.skin_type ?? '',
-    medicalConditions: r.medical_conditions ?? '',
-    currentMedications: r.current_medications ?? '',
-    pregnantOrLactating: r.pregnant_or_lactating,
-    hasPacemakerOrImplants: r.has_pacemaker_or_implants,
-    previousReactions: r.previous_aesthetic_reactions ?? '',
-    filledAt: r.filled_at,
-    updatedAt: r.updated_at,
-    signatureConsent: r.signature_consent,
-    accessLogs: logs.map(
-      (l): AnamnesisAccessLog => ({
-        id: l.id,
-        accessedBy: l.accessed_by,
-        accessedByName: l.accessed_by_name ?? 'Equipe',
-        accessedAt: l.accessed_at,
-        action: l.action
-      })
-    )
-  };
+export async function saveClientNotes(clinicId: string, clientId: string, notes: string): Promise<void> {
+  const { error } = await supabase.rpc('staff_set_client_notes', {
+    p_clinic_id: clinicId,
+    p_client_id: clientId,
+    p_notes: notes
+  });
+  if (error) fail(error, 'Observação do cliente');
 }
 
-/** Ficha do próprio cliente (ou ficha vazia se ainda não preencheu). */
-export async function fetchMyAnamnesis(clinicId: string, userId: string): Promise<AnamnesisRecord> {
-  const { data, error } = await supabase
-    .from('anamnesis_records')
-    .select('*')
-    .eq('clinic_id', clinicId)
-    .eq('client_id', userId)
-    .maybeSingle();
-  if (error) fail(error, 'Anamnese');
-  return data ? mapAnamnesis(data) : emptyAnamnesis(userId);
+export interface NewClientInput {
+  fullName: string;
+  phone: string;
+  email: string;
+  cpf?: string;
+  birthDate?: string;
+  notes?: string;
+  optInWhatsapp: boolean;
+  optInEmail: boolean;
 }
 
-export async function saveMyAnamnesis(clinicId: string, userId: string, a: Partial<AnamnesisRecord>): Promise<AnamnesisRecord> {
-  const row = {
-    clinic_id: clinicId,
-    client_id: userId,
-    allergies: a.allergies ?? '',
-    skin_type: a.skinType ?? '',
-    medical_conditions: a.medicalConditions ?? '',
-    current_medications: a.currentMedications ?? '',
-    pregnant_or_lactating: a.pregnantOrLactating ?? false,
-    has_pacemaker_or_implants: a.hasPacemakerOrImplants ?? false,
-    previous_aesthetic_reactions: a.previousReactions ?? '',
-    signature_consent: a.signatureConsent ?? true
-  };
-  const { data, error } = await supabase
-    .from('anamnesis_records')
-    .upsert(row, { onConflict: 'clinic_id,client_id' })
-    .select('*')
-    .single();
-  if (error) fail(error, 'Anamnese');
-  return mapAnamnesis(data);
+/**
+ * Equipe cadastra um cliente. Criar a conta de login exige a chave service_role, que NUNCA vai ao
+ * navegador: quem faz isso é a rota serverless /api/admin/create-client, que confere se quem chama
+ * é equipe (ADMIN/RECEPTIONIST) da clínica. Devolve a senha provisória (mostrada uma única vez).
+ */
+export async function createClientAsStaff(
+  clinicId: string,
+  input: NewClientInput
+): Promise<{ clientId: string; temporaryPassword: string }> {
+  const { data: sess } = await supabase.auth.getSession();
+  const token = sess.session?.access_token;
+  if (!token) throw new ApiError('Sessão expirada. Entre novamente.');
+
+  let res: Response;
+  try {
+    res = await fetch('/api/admin/create-client', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ clinicId, ...input })
+    });
+  } catch {
+    throw new ApiError('Não foi possível falar com o servidor. Verifique sua conexão.');
+  }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new ApiError(
+      body?.error ||
+        (res.status === 404
+          ? 'A rota /api/admin/create-client não existe neste ambiente. Ela só funciona publicada na Vercel (ou com "vercel dev").'
+          : 'Não foi possível cadastrar o cliente.')
+    );
+  }
+  return { clientId: body.clientId as string, temporaryPassword: body.temporaryPassword as string };
 }
 
-/** Equipe: lista de prontuários, sem conteúdo de saúde. */
-export async function fetchAnamnesisOverview(clinicId: string): Promise<AnamnesisOverviewItem[]> {
-  const { data, error } = await supabase.rpc('staff_list_anamnesis', { p_clinic_id: clinicId });
-  if (error) fail(error, 'Prontuários');
-  return (data ?? []).map((r: any) => ({
-    clientId: r.client_id,
-    clientName: r.client_name,
-    updatedAt: r.updated_at,
-    accessCount: Number(r.access_count)
-  }));
-}
-
-/** Equipe: abre a ficha. O banco registra o acesso no log de auditoria automaticamente. */
-export async function openAnamnesisAsStaff(clinicId: string, clientId: string): Promise<AnamnesisRecord | null> {
-  const { data, error } = await supabase.rpc('staff_view_anamnesis', { p_clinic_id: clinicId, p_client_id: clientId });
-  if (error) fail(error, 'Prontuário');
-  if (!data) return null;
-  return mapAnamnesis(data, data.access_logs ?? []);
+/** Primeiro acesso de um cliente cadastrado pela equipe: troca a senha provisória. */
+export async function completeFirstAccess(newPassword: string): Promise<void> {
+  const { error } = await supabase.auth.updateUser({ password: newPassword, data: { must_change_password: false } });
+  if (error) throw new ApiError(error.message);
 }
 
 // ---------------------------------------------------------------------------

@@ -42,7 +42,6 @@ export interface Service {
   durationMinutes: number;
   priceCents: number;
   recoveryInfo: string;
-  requiresAnamnesis: boolean;
   imageUrl?: string;
   badge?: string;
   isActive: boolean;
@@ -108,30 +107,6 @@ export interface Appointment {
   cancelledBy?: string;
   statusHistory: StatusAuditEntry[];
   createdAt: string;
-}
-
-export interface AnamnesisAccessLog {
-  id: string;
-  accessedBy: string;
-  accessedByName: string;
-  accessedAt: string;
-  action: 'VIEW' | 'UPDATE' | 'EXPORT';
-}
-
-export interface AnamnesisRecord {
-  id: string;
-  clientId: string;
-  allergies: string;
-  skinType: string;
-  medicalConditions: string;
-  currentMedications: string;
-  pregnantOrLactating: boolean;
-  hasPacemakerOrImplants: boolean;
-  previousReactions: string;
-  filledAt: string;
-  updatedAt: string;
-  signatureConsent: boolean;
-  accessLogs: AnamnesisAccessLog[];
 }
 
 export interface NotificationLog {
@@ -211,10 +186,16 @@ export interface BusyBlock {
   status: AppointmentStatus;
 }
 
-/** Item da lista de prontuários da equipe (sem dados de saúde). */
-export interface AnamnesisOverviewItem {
-  clientId: string;
-  clientName: string;
-  updatedAt: string;
-  accessCount: number;
+/** Cliente da clínica (cadastro básico; sem dados de saúde). */
+export interface ClientRecord {
+  id: string;
+  fullName: string;
+  phone: string;
+  email: string;
+  cpf?: string;
+  birthDate?: string;
+  isActive: boolean;
+  createdAt: string;
+  /** Observação interna da equipe (o cliente não vê). */
+  staffNotes: string;
 }

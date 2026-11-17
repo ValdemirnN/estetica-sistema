@@ -1,3 +1,4 @@
 {
-  "rewrites": [{ "source": "/((?!assets/).*)", "destination": "/index.html" }]
+  "crons": [{ "path": "/api/notify/reminders", "schedule": "0 11 * * *" }],
+  "rewrites": [{ "source": "/((?!assets/|api/).*)", "destination": "/index.html" }]
 }

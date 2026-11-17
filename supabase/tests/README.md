@@ -14,3 +14,5 @@ psql teste -f multi_clinic_rls_test.sql     # cada linha mostra "BLOCKED..." (es
 ```
 Linhas com `UNEXPECTEDLY-OK` seriam falhas de isolamento (a única exceção esperada é o upload na pasta da
 própria clínica, na seção 14, que deve passar).
+
+Depois da migration `20261118000100`, rode `psql teste -f sem_prontuario_agenda_test.sql` (remarcação, clientes, anamnese removida). Ele traz seus próprios helpers e usa o legado de `01_seed_legacy.sql`.

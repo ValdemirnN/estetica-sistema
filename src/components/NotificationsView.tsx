@@ -41,8 +41,9 @@ export function NotificationsView({
             Envios transacionais automáticos via <strong>Meta Cloud API (WhatsApp Oficial)</strong> com templates pré-homologados (sem risco de banimento) e fallback imediato por e-mail via <strong>Resend</strong>.
           </p>
           <p className="text-[11px] text-amber-300/90 mt-2 max-w-2xl leading-relaxed">
-            A fila abaixo é gravada no banco a cada agendamento. O envio efetivo ao WhatsApp/e-mail depende de um worker
-            (ex.: Edge Function agendada) conectado ao provedor; enquanto ele não existir, as mensagens permanecem como “na fila”.
+            A fila abaixo é gravada no banco a cada agendamento ou remarcação. O envio automático por e-mail é feito pela rota
+            <code className="text-amber-200"> /api/notify/reminders</code> (Resend), chamada por um agendador. O envio automático
+            por WhatsApp ainda não existe: use o botão “Lembrete” da agenda para abrir a conversa com a mensagem pronta.
           </p>
         </div>
 
