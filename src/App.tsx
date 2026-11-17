@@ -504,6 +504,7 @@ function ClinicApp({ userId, clinic }: { userId: string; clinic: ClinicBranding 
             </button>
             )}
 
+            {isStaff && (
             <button
               onClick={() => setMainTab('notifications')}
               className={`px-3.5 py-2 rounded-xl font-semibold transition-all flex items-center gap-2 ${
@@ -513,11 +514,12 @@ function ClinicApp({ userId, clinic }: { userId: string; clinic: ClinicBranding 
               }`}
             >
               <Bell className="w-4 h-4" />
-              Notificações WhatsApp & E-mail
+              Central de Comunicação
               {notifications.filter((n) => n.status === 'QUEUED').length > 0 && (
                 <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
               )}
             </button>
+            )}
 
             {isPlatform && (
               <button
@@ -573,8 +575,22 @@ function ClinicApp({ userId, clinic }: { userId: string; clinic: ClinicBranding 
           />
         )}
 
-        {mainTab === 'notifications' && (
+        {mainTab === 'notifications' && isStaff && (
           <NotificationsView
+            sample={(() => {
+              const next = appointments
+                .filter((a) => a.status === 'CONFIRMED' && new Date(a.startTime) >= new Date())
+                .sort((a, b) => a.startTime.localeCompare(b.startTime))[0];
+              if (!next) return null;
+              return {
+                clientName: next.clientName,
+                serviceName: services.find((x) => x.id === next.serviceId)?.name ?? '',
+                professionalName: professionals.find((x) => x.id === next.professionalId)?.name ?? '',
+                startTime: next.startTime
+              };
+            })()}
+            clinicName={settings.name}
+            clinicAddress={settings.address}
             notifications={notifications}
             onRefresh={handleRefreshNotifications}
             isRefreshing={isRefreshingNotifs}
