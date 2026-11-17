@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { isSupabaseConfigured, supabase } from './lib/supabase';
 import {
@@ -33,13 +33,10 @@ import {
   UserProfile,
   UserRole
 } from './types/clinic';
-import { ClientView } from './components/client/ClientView';
-import { AdminView } from './components/admin/AdminView';
-import { NotificationsView } from './components/NotificationsView';
 import { AuthScreen } from './components/auth/AuthScreen';
 import { FirstAccessPasswordModal } from './components/auth/FirstAccessPasswordModal';
 import type { SeriesResult } from './components/clinic/NewAppointmentModal';
-import { PlatformAdmin } from './components/PlatformAdmin';
+import { ViewFallback } from './components/ViewFallback';
 import { applyTheme, resetTheme } from './lib/theme';
 import { isPlatformRoute, resolveClinicSlug } from './lib/tenant';
 import {
@@ -53,6 +50,12 @@ import {
   Smartphone,
   Building2
 } from 'lucide-react';
+
+// Telas carregadas sob demanda: cada perfil baixa só o que usa.
+const ClientView = lazy(() => import('./components/client/ClientView').then((m) => ({ default: m.ClientView })));
+const AdminView = lazy(() => import('./components/admin/AdminView').then((m) => ({ default: m.AdminView })));
+const NotificationsView = lazy(() => import('./components/NotificationsView').then((m) => ({ default: m.NotificationsView })));
+const PlatformAdmin = lazy(() => import('./components/PlatformAdmin').then((m) => ({ default: m.PlatformAdmin })));
 
 const ROLE_LABEL: Record<UserRole, string> = {
   CLIENT: 'Cliente',
@@ -187,7 +190,11 @@ function PlatformGate() {
       </div>
     );
   }
-  return <PlatformAdmin allowed={allowed} />;
+  return (
+    <Suspense fallback={<ViewFallback />}>
+      <PlatformAdmin allowed={allowed} />
+    </Suspense>
+  );
 }
 
 function ClinicApp({ userId, clinic }: { userId: string; clinic: ClinicBranding }) {
@@ -432,7 +439,13 @@ function ClinicApp({ userId, clinic }: { userId: string; clinic: ClinicBranding 
     }
   };
 
-  if (showPlatform && isPlatform) return <PlatformAdmin allowed onBack={() => setShowPlatform(false)} />;
+  if (showPlatform && isPlatform) {
+    return (
+      <Suspense fallback={<ViewFallback />}>
+        <PlatformAdmin allowed onBack={() => setShowPlatform(false)} />
+      </Suspense>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-rose-500 selection:text-white">
@@ -486,7 +499,7 @@ function ClinicApp({ userId, clinic }: { userId: string; clinic: ClinicBranding 
               }`}
             >
               <Smartphone className="w-4 h-4" />
-              App do Cliente (Mobile-First)
+              Minha Área
             </button>
             )}
 
@@ -537,6 +550,7 @@ function ClinicApp({ userId, clinic }: { userId: string; clinic: ClinicBranding 
 
       {/* Main View Area */}
       <main className="flex-1 max-w-7xl mx-auto px-4 py-6 w-full">
+        <Suspense fallback={<ViewFallback />}>
         {mainTab === 'client-app' && !isStaff && (
           <ClientView
             currentUser={currentUser}
@@ -596,7 +610,7 @@ function ClinicApp({ userId, clinic }: { userId: string; clinic: ClinicBranding 
             isRefreshing={isRefreshingNotifs}
           />
         )}
-
+        </Suspense>
       </main>
 
       {/* Floating Toast Feedback */}

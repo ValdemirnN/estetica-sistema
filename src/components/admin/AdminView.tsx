@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { Suspense, lazy, useState } from 'react';
 import {
   Appointment,
   AppointmentStatus,
@@ -12,7 +12,7 @@ import {
   UserProfile
 } from '../../types/clinic';
 import type { BookingInput, NewClientInput } from '../../services/api';
-import { AdminDashboard } from './AdminDashboard';
+import { ViewFallback } from '../ViewFallback';
 import { ServicesManager } from './ServicesManager';
 import { ProfessionalsManager } from './ProfessionalsManager';
 import { ClinicSettingsPanel } from './ClinicSettingsPanel';
@@ -52,6 +52,9 @@ interface AdminViewProps {
 }
 
 type AdminTab = 'dashboard' | 'calendar' | 'services' | 'professionals' | 'clients' | 'settings';
+
+// O dashboard carrega o recharts: fica em chunk próprio.
+const AdminDashboard = lazy(() => import('./AdminDashboard').then((m) => ({ default: m.AdminDashboard })));
 
 export function AdminView({
   currentUser,
@@ -161,12 +164,14 @@ export function AdminView({
 
       {/* ================= ABA 0: DASHBOARD COM RECHARTS ================= */}
       {activeTab === 'dashboard' && (
-        <AdminDashboard
-          currentUser={currentUser}
-          appointments={appointments}
-          professionals={professionals}
-          services={services}
-        />
+        <Suspense fallback={<ViewFallback />}>
+          <AdminDashboard
+            currentUser={currentUser}
+            appointments={appointments}
+            professionals={professionals}
+            services={services}
+          />
+        </Suspense>
       )}
 
       {/* ================= ABA 1: AGENDA ================= */}

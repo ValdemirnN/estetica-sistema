@@ -1,6 +1,8 @@
-# 🌸 Aesthetiq - Sistema de Agendamento Clínico (Supabase + FastAPI + Next.js)
+# 🌸 Sistema de Agendamento para Clínicas de Estética
 
-Sistema de agendamento online de alta performance para clínica de estética com:
+**Stack:** Vite + React 19 + TypeScript + Tailwind 4 no front; Supabase (Postgres, Auth, RLS, Storage) no banco; funções serverless da Vercel em `/api`.
+
+Sistema de agendamento online, multi-clínica, com:
 - Trava definitiva de concorrência e **prevenção de double-booking** no banco via PostgreSQL `btree_gist` (`EXCLUDE USING gist`);
 - **Row Level Security (RLS)** ativo em 100% das tabelas (Clientes só acessam os próprios dados; Staff e Admin gerenciam a clínica);
 - **Sem prontuário**: o sistema guarda só o cadastro básico do cliente (nome, contato, CPF/nascimento opcionais) e o agendamento, conforme a **LGPD (Lei 13.709/2018)**; nenhum dado de saúde;
@@ -33,6 +35,7 @@ Para uma instalação de uma clínica só, use `VITE_DEFAULT_CLINIC_SLUG`.
    1. `supabase/migrations/20261104000100_initial_schema.sql`
    2. `supabase/migrations/20261116000100_app_integration.sql`
    3. `supabase/migrations/20261117000100_multi_clinic.sql` — multi-clínica. Se você já tinha a clínica única funcionando, ela vira a clínica `aesthetiq`, com todos os dados e papéis preservados. Também cria o bucket de imagens `clinic-assets`.
+   4. `supabase/migrations/20261118000100_sem_prontuario_agenda_clientes.sql` — remove prontuário/anamnese (LGPD) e cria a agenda da equipe e o cadastro de clientes. **Apaga** as tabelas de anamnese: exporte antes se precisar.
 2. **Variáveis:** copie `.env.example` para `.env` e preencha `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY` (chave **anon**, nunca a `service_role`).
 3. **Rodar:** `npm install && npm run dev`.
 4. **Você, dono da plataforma** — crie uma conta pelo app e, no SQL Editor:
@@ -57,40 +60,22 @@ Para uma instalação de uma clínica só, use `VITE_DEFAULT_CLINIC_SLUG`.
 ### Limitações conhecidas
 - Fuso fixo em America/Sao_Paulo para todas as clínicas.
 - A tela "Meu Dashboard" do cliente ainda mostra dados ilustrativos (gráficos e "Nível Gold VIP"), herdados do protótipo.
-- `supabase_schema.sql` na raiz é o schema inicial antigo (sem multi-clínica); use as migrations.
 - O envio automático de **WhatsApp** ainda não existe: a fila grava os avisos e `/api/notify/reminders` envia por **e-mail** (Resend); avisos de WhatsApp caem para e-mail quando o cliente aceitou e-mail. A equipe também pode usar o botão “Lembrete” da agenda (abre o WhatsApp com a mensagem pronta).
 - O cron padrão em `vercel.json` roda **1x por dia** (limite do plano gratuito da Vercel). Para lembretes mais pontuais, use o plano Pro ou chame a rota a cada 10–15 min por um agendador externo.
 
 ---
 
-## 🚀 Como Rodar o Banco de Dados no Supabase
+## 🚀 Como aplicar o banco no Supabase
 
-Você tem **duas formas simples** de rodar o arquivo no seu Supabase:
+As migrations ficam em `supabase/migrations` e devem rodar **em ordem** (todas podem ser reexecutadas).
 
-### Opção 1: Direto no Painel do Supabase (1 Minuto - Recomendado para começar)
-1. Acesse o seu projeto no [Supabase Dashboard](https://supabase.com/dashboard).
-2. No menu lateral esquerdo, clique no ícone **SQL Editor**.
-3. Clique em **"New query"** (Nova consulta).
-4. Abra o arquivo `supabase_schema.sql` (ou `supabase/migrations/20261104000100_initial_schema.sql`), copie todo o conteúdo e cole no editor.
-5. Clique no botão verde **"Run"** (no canto inferior direito ou aperte `Ctrl + Enter` / `Cmd + Enter`).
-6. **Pronto!** Todas as tabelas, enums, triggers, índices, RLS e dados de teste estarão criados.
+**Opção 1 — SQL Editor (mais rápido para começar):** abra o projeto no [Supabase Dashboard](https://supabase.com/dashboard), vá em *SQL Editor → New query*, cole o conteúdo de cada migration na ordem da lista acima e clique em *Run*.
 
----
-
-### Opção 2: Pelo GitHub com a Supabase CLI (Pipeline de CI/CD para Produção)
-Se você estiver versionando o projeto no GitHub com a Supabase CLI:
+**Opção 2 — Supabase CLI:**
 
 ```bash
-# 1. Instale ou atualize a CLI do Supabase
-npm install supabase --save-dev
-
-# 2. Faça o login na sua conta Supabase
 npx supabase login
-
-# 3. Vincule o repositório local ao seu projeto do Supabase (substitua pelo seu Reference ID)
 npx supabase link --project-ref seu-project-ref-aqui
-
-# 4. Aplique a migration diretamente no banco de produção
 npx supabase db push
 ```
 

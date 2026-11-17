@@ -32,10 +32,8 @@ export class ApiError extends Error {
 function fail(error: { message: string; code?: string }, context: string): never {
   // 42P01 = tabela inexistente → migrations não foram aplicadas
   if (error.code === '42P01' || error.code === 'PGRST205' || error.code === 'PGRST202') {
-    throw new ApiError(
-      `${context}: o banco ainda não tem as tabelas/funções esperadas. Aplique as migrations em supabase/migrations.`,
-      error.code
-    );
+    console.error(`[${context}] estrutura do banco incompleta (${error.code}): aplique as migrations.`);
+    throw new ApiError('O serviço está em manutenção. Tente novamente em alguns minutos.', error.code);
   }
   throw new ApiError(error.message, error.code);
 }
@@ -349,9 +347,11 @@ export async function uploadClinicImage(clinicId: string, file: File): Promise<s
   });
   if (error) {
     if (/bucket not found/i.test(error.message)) {
-      throw new ApiError('O armazenamento de imagens ainda não foi criado. Aplique a migration multi-clínica no Supabase.');
+      console.error('Bucket clinic-assets ausente: aplique a migration multi-clínica.');
+      throw new ApiError('Não foi possível enviar a imagem agora. Tente novamente em alguns minutos.');
     }
-    throw new ApiError(`Não foi possível enviar a imagem: ${error.message}`);
+    console.error('Falha no upload de imagem:', error.message);
+    throw new ApiError('Não foi possível enviar a imagem. Tente novamente.');
   }
   return supabase.storage.from('clinic-assets').getPublicUrl(path).data.publicUrl;
 }

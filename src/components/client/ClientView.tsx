@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { Suspense, lazy, useState } from 'react';
 import {
   Service,
   ServiceCategory,
@@ -17,7 +17,7 @@ import {
   formatLocalTime,
   TimeSlot
 } from '../../services/slotCalculator';
-import { ClientDashboard } from './ClientDashboard';
+import { ViewFallback } from '../ViewFallback';
 import {
   Calendar,
   Clock,
@@ -54,6 +54,9 @@ interface ClientViewProps {
   onCancelAppointment: (aptId: string, reason: string) => Promise<boolean>;
   onExportData: () => void;
 }
+
+// O dashboard carrega o recharts: fica em chunk próprio.
+const ClientDashboard = lazy(() => import('./ClientDashboard').then((m) => ({ default: m.ClientDashboard })));
 
 export function ClientView({
   currentUser,
@@ -228,19 +231,21 @@ export function ClientView({
 
       {/* ================= ABA 0: DASHBOARD PESSOAL DO CLIENTE ================= */}
       {activeTab === 'dashboard' && !selectedService && (
-        <ClientDashboard
-          currentUser={currentUser}
-          appointments={appointments}
-          services={services}
-          professionals={professionals}
-          onNavigateToBooking={() => {
-            setActiveTab('catalog');
-            setSelectedService(null);
-          }}
-          onNavigateToAppointments={() => {
-            setActiveTab('my-appointments');
-          }}
-        />
+        <Suspense fallback={<ViewFallback />}>
+          <ClientDashboard
+            currentUser={currentUser}
+            appointments={appointments}
+            services={services}
+            professionals={professionals}
+            onNavigateToBooking={() => {
+              setActiveTab('catalog');
+              setSelectedService(null);
+            }}
+            onNavigateToAppointments={() => {
+              setActiveTab('my-appointments');
+            }}
+          />
+        </Suspense>
       )}
 
       {/* ================= ABA 1: CATÁLOGO & AGENDAMENTO ================= */}
