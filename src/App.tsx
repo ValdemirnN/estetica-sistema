@@ -29,6 +29,7 @@ import {
   BusyBlock,
   ClientRecord,
   ClinicBranding,
+  AgendaStatus,
   NotificationLog,
   UserProfile,
   UserRole
@@ -208,6 +209,7 @@ function ClinicApp({ userId, clinic }: { userId: string; clinic: ClinicBranding 
   const [busyBlocks, setBusyBlocks] = useState<BusyBlock[]>([]);
   const [notifications, setNotifications] = useState<NotificationLog[]>([]);
   const [clients, setClients] = useState<ClientRecord[]>([]);
+  const [agendaStatus, setAgendaStatus] = useState<AgendaStatus>('ready');
 
   const [loadError, setLoadError] = useState<string | null>(null);
   const [mainTab, setMainTab] = useState<MainTab>('client-app');
@@ -262,7 +264,7 @@ function ClinicApp({ userId, clinic }: { userId: string; clinic: ClinicBranding 
   // (outros clientes podem ter agendado enquanto isso).
   useEffect(() => {
     const onVisible = () => {
-      if (document.visibilityState === 'visible' && currentUser) refreshAgenda().catch(() => {});
+      if (document.visibilityState === 'visible' && currentUser) reloadAgenda();
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
@@ -277,6 +279,17 @@ function ClinicApp({ userId, clinic }: { userId: string; clinic: ClinicBranding 
     setAppointments(appts);
     setBusyBlocks(busy);
     setNotifications(notifs);
+  };
+
+  // Atualiza a agenda e registra o resultado, para o painel mostrar "Tentar de novo" se falhar.
+  const reloadAgenda = async () => {
+    setAgendaStatus('refreshing');
+    try {
+      await refreshAgenda();
+      setAgendaStatus('ready');
+    } catch {
+      setAgendaStatus('error');
+    }
   };
 
   const handleSignOut = async () => {
@@ -561,6 +574,8 @@ function ClinicApp({ userId, clinic }: { userId: string; clinic: ClinicBranding 
             busyBlocks={busyBlocks}
             leaves={leaves}
             settings={settings}
+            agendaStatus={agendaStatus}
+            onRetryAgenda={reloadAgenda}
             onBookAppointment={handleBookAppointment}
             onCancelAppointment={handleCancelAppointment}
             onExportData={handleExportData}

@@ -1,7 +1,9 @@
 import React, { useMemo } from 'react';
 import {
+  AgendaStatus,
   Appointment,
   Service,
+  ServiceCategory,
   Professional,
   UserProfile
 } from '../../types/clinic';
@@ -28,36 +30,70 @@ import {
   ShieldCheck,
   CheckCircle2,
   CalendarCheck,
+  CalendarPlus,
   Smile
 } from 'lucide-react';
 import { formatLocalDate, formatLocalTime } from '../../services/slotCalculator';
+import {
+  DueStatus,
+  careMinutes,
+  categoryMix,
+  dueText,
+  intervalText,
+  monthlySessions,
+  preventiveSchedule
+} from '../../services/clientInsights';
+import { EmptyState, InlineError } from '../StateBlocks';
 
 interface ClientDashboardProps {
   currentUser: UserProfile;
   appointments: Appointment[];
+  categories: ServiceCategory[];
   services: Service[];
   professionals: Professional[];
+  agendaStatus: AgendaStatus;
+  onRetry: () => void;
   onNavigateToBooking: () => void;
   onNavigateToAppointments: () => void;
+  /** Abre o agendamento já com o procedimento escolhido. */
+  onBookService: (serviceId: string) => void;
+}
+
+const MIX_COLORS = ['#ec4899', '#8b5cf6', '#10b981', '#06b6d4', '#f59e0b', '#64748b'];
+
+const DUE_STYLE: Record<DueStatus, { badge: string; label: string }> = {
+  overdue: { badge: 'text-rose-300 bg-rose-500/10 border-rose-500/30', label: 'Atrasado' },
+  today: { badge: 'text-amber-300 bg-amber-500/10 border-amber-500/30', label: 'Hoje' },
+  soon: { badge: 'text-amber-300 bg-amber-500/10 border-amber-500/30', label: 'Em breve' },
+  upcoming: { badge: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/30', label: 'No prazo' }
+};
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+function formatCareTime(minutes: number): string {
+  const total = Math.round(minutes);
+  if (total < 60) return `${total} min`;
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  return m === 0 ? `${h} h` : `${h} h ${m} min`;
 }
 
 export function ClientDashboard({
   currentUser,
   appointments,
+  categories,
   services,
   professionals,
+  agendaStatus,
+  onRetry,
   onNavigateToBooking,
-  onNavigateToAppointments
+  onNavigateToAppointments,
+  onBookService
 }: ClientDashboardProps) {
-  // Filtra apenas agendamentos desta cliente
+  // Só os agendamentos desta cliente
   const clientApts = useMemo(() => {
     return appointments.filter((a) => a.clientId === currentUser.id);
   }, [appointments, currentUser.id]);
-
-  const futureCount = useMemo(() => {
-    const now = new Date();
-    return clientApts.filter((a) => a.status === 'CONFIRMED' && new Date(a.startTime) >= now).length;
-  }, [clientApts]);
 
   const upcomingApt = useMemo(() => {
     const now = new Date();
@@ -66,60 +102,25 @@ export function ClientDashboard({
       .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())[0];
   }, [clientApts]);
 
-  const completedApts = useMemo(() => {
-    return clientApts.filter((a) => a.status === 'COMPLETED');
+  const futureCount = useMemo(() => {
+    const now = new Date();
+    return clientApts.filter((a) => a.status === 'CONFIRMED' && new Date(a.startTime) >= now).length;
   }, [clientApts]);
 
-  // Horas totais de autocuidado dedicadas
-  const totalCareMinutes = useMemo(() => {
-    return completedApts.reduce((sum, a) => {
-      const srv = services.find((s) => s.id === a.serviceId);
-      return sum + (srv?.durationMinutes || 60);
-    }, 0);
-  }, [completedApts, services]);
+  const completedCount = useMemo(() => clientApts.filter((a) => a.status === 'COMPLETED').length, [clientApts]);
 
-  // Gráfico Recharts 1: Evolução das Sessões de Autocuidado (Mês a Mês)
-  const monthlyCareData = useMemo(() => {
-    return [
-      { mes: 'Jul', sessoes: 1 },
-      { mes: 'Ago', sessoes: 2 },
-      { mes: 'Set', sessoes: 1 },
-      { mes: 'Out', sessoes: 2 },
-      { mes: 'Nov (Atual)', sessoes: Math.max(1, completedApts.length) }
-    ];
-  }, [completedApts]);
-
-  // Gráfico Recharts 2: Mix de Procedimentos da Cliente
-  const categoryMixData = useMemo(() => {
-    const counts: Record<string, { name: string; value: number }> = {
-      facial: { name: 'Facial & Limpeza', value: 0 },
-      injetaveis: { name: 'Harmonização & Botox', value: 0 },
-      corporal: { name: 'Corporal & Drenagem', value: 0 },
-      laser: { name: 'Laser & Depilação', value: 0 }
-    };
-
-    clientApts.forEach((apt) => {
-      const srv = services.find((s) => s.id === apt.serviceId);
-      if (!srv) return;
-      if (srv.categoryId === 'cat-1') counts.facial.value += 1;
-      else if (srv.categoryId === 'cat-2') counts.injetaveis.value += 1;
-      else if (srv.categoryId === 'cat-3') counts.corporal.value += 1;
-      else if (srv.categoryId === 'cat-4') counts.laser.value += 1;
-    });
-
-    // Se estiver vazio, fornecer distribuição padrão
-    const filtered = Object.values(counts).filter((c) => c.value > 0);
-    if (filtered.length === 0) {
-      return [
-        { name: 'Facial & Limpeza', value: 2 },
-        { name: 'Harmonização & Botox', value: 1 },
-        { name: 'Laser & Depilação', value: 1 }
-      ];
-    }
-    return filtered;
-  }, [clientApts, services]);
-
-  const mixColors = ['#ec4899', '#8b5cf6', '#10b981', '#06b6d4'];
+  // Tudo abaixo é calculado dos agendamentos reais (sem valores fixos nem mínimos forçados).
+  const totalCareMinutes = useMemo(() => careMinutes(clientApts, currentUser.id), [clientApts, currentUser.id]);
+  const monthlyData = useMemo(() => monthlySessions(clientApts, currentUser.id), [clientApts, currentUser.id]);
+  const mixData = useMemo(
+    () => categoryMix(clientApts, currentUser.id, services, categories),
+    [clientApts, currentUser.id, services, categories]
+  );
+  const schedule = useMemo(
+    () => preventiveSchedule(clientApts, currentUser.id, services),
+    [clientApts, currentUser.id, services]
+  );
+  const hasMonthlyData = monthlyData.some((m) => m.sessions > 0);
 
   const upcomingService = upcomingApt
     ? services.find((s) => s.id === upcomingApt.serviceId)
@@ -130,6 +131,13 @@ export function ClientDashboard({
 
   return (
     <div className="space-y-6">
+      {agendaStatus === 'error' && (
+        <InlineError
+          text="Não foi possível atualizar seus agendamentos. O que aparece abaixo pode estar desatualizado."
+          onRetry={onRetry}
+        />
+      )}
+
       {/* Banner de Boas-Vindas Personalizado */}
       <div className="bg-gradient-to-r from-rose-950/40 via-slate-900 to-indigo-950/40 border border-rose-500/20 rounded-2xl p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="space-y-1">
@@ -163,7 +171,7 @@ export function ClientDashboard({
             </span>
           </div>
           <div className="text-2xl font-bold font-mono text-white">
-            {completedApts.length} procedimentos
+            {plural(completedCount, 'procedimento', 'procedimentos')}
           </div>
           <p className="text-[11px] text-slate-400">Atendimentos concluídos</p>
         </div>
@@ -176,9 +184,9 @@ export function ClientDashboard({
             </span>
           </div>
           <div className="text-2xl font-bold font-mono text-white">
-            {Math.round((totalCareMinutes / 60) * 10) / 10} horas
+            {formatCareTime(totalCareMinutes)}
           </div>
-          <p className="text-[11px] text-emerald-400">Dedicadas ao seu bem-estar</p>
+          <p className="text-[11px] text-emerald-400">Dedicado ao seu bem-estar</p>
         </div>
 
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-2">
@@ -189,7 +197,7 @@ export function ClientDashboard({
             </span>
           </div>
           <div className="text-2xl font-bold font-mono text-amber-300">
-            {futureCount} {futureCount === 1 ? 'agendamento' : 'agendamentos'}
+            {plural(futureCount, 'agendamento', 'agendamentos')}
           </div>
           <p className="text-[11px] text-slate-400">
             {futureCount === 0 ? 'Nenhum horário reservado' : 'Já reservados para você'}
@@ -248,127 +256,133 @@ export function ClientDashboard({
         </div>
       )}
 
-      {/* Gráficos Recharts da Cliente: Frequência e Mix de Tratamentos */}
+      {/* Gráficos: frequência (últimos 6 meses) e mix por categoria */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Gráfico 1: Histórico de Frequência de Sessões */}
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                <CalendarCheck className="w-4 h-4 text-rose-400" />
-                Frequência de Cuidados (Mês a Mês)
-              </h3>
-              <p className="text-xs text-slate-400 mt-0.5">
-                Número de procedimentos realizados ao longo do ano
-              </p>
-            </div>
+          <div>
+            <h3 className="text-sm font-bold text-white flex items-center gap-2">
+              <CalendarCheck className="w-4 h-4 text-rose-400" />
+              Frequência de Cuidados (Mês a Mês)
+            </h3>
+            <p className="text-xs text-slate-400 mt-0.5">Atendimentos concluídos nos últimos 6 meses</p>
           </div>
 
-          <div className="h-64 w-full pt-2">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={monthlyCareData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                <XAxis dataKey="mes" stroke="#64748b" fontSize={11} />
-                <YAxis stroke="#64748b" fontSize={11} allowDecimals={false} />
-                <Tooltip
-                  contentStyle={{ backgroundColor: '#090d16', borderColor: '#334155', borderRadius: '12px', fontSize: '12px' }}
-                  formatter={(value: any) => [`${value} sessão(ões)`, 'Autocuidado']}
-                />
-                <Bar dataKey="sessoes" fill="#ec4899" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+          {hasMonthlyData ? (
+            <div className="h-64 w-full pt-2">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={monthlyData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                  <XAxis dataKey="label" stroke="#64748b" fontSize={11} />
+                  <YAxis stroke="#64748b" fontSize={11} allowDecimals={false} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#090d16', borderColor: '#334155', borderRadius: '12px', fontSize: '12px' }}
+                    labelFormatter={(_, items) => (items?.[0]?.payload as { fullLabel?: string } | undefined)?.fullLabel ?? ''}
+                    formatter={(value: any) => [plural(Number(value), 'atendimento', 'atendimentos'), 'Concluídos']}
+                  />
+                  <Bar dataKey="sessions" fill="#ec4899" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <EmptyState
+              icon={<CalendarCheck className="w-5 h-5" />}
+              title="Nenhum atendimento concluído nos últimos 6 meses"
+              text="Quando você concluir um procedimento, sua frequência aparece aqui."
+              actionLabel="Agendar"
+              onAction={onNavigateToBooking}
+            />
+          )}
         </div>
 
-        {/* Gráfico 2: Mix de Tratamentos Favoritos */}
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                <Smile className="w-4 h-4 text-indigo-400" />
-                Seus Procedimentos Favoritos
-              </h3>
-              <p className="text-xs text-slate-400 mt-0.5">
-                Distribuição dos tratamentos que você mais realiza
-              </p>
-            </div>
+          <div>
+            <h3 className="text-sm font-bold text-white flex items-center gap-2">
+              <Smile className="w-4 h-4 text-indigo-400" />
+              Seus Procedimentos Favoritos
+            </h3>
+            <p className="text-xs text-slate-400 mt-0.5">Atendimentos concluídos, por categoria</p>
           </div>
 
-          <div className="h-64 w-full flex items-center justify-center">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={categoryMixData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={55}
-                  outerRadius={80}
-                  paddingAngle={5}
-                  dataKey="value"
-                >
-                  {categoryMixData.map((_, index) => (
-                    <Cell
-                      key={`cell-${index}`}
-                      fill={mixColors[index % mixColors.length]}
-                    />
-                  ))}
-                </Pie>
-                <Tooltip
-                  contentStyle={{ backgroundColor: '#090d16', borderColor: '#334155', borderRadius: '12px', fontSize: '12px' }}
-                  formatter={(value: any) => [`${value} atendimento(s)`, 'Frequência']}
-                />
-                <Legend
-                  verticalAlign="bottom"
-                  height={36}
-                  formatter={(value, entry: any) => (
-                    <span className="text-[11px] text-slate-300">
-                      {entry.payload.name}
-                    </span>
-                  )}
-                />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
+          {mixData.length > 0 ? (
+            <div className="h-64 w-full flex items-center justify-center">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie data={mixData} cx="50%" cy="50%" innerRadius={55} outerRadius={80} paddingAngle={5} dataKey="value" nameKey="name">
+                    {mixData.map((slice, index) => (
+                      <Cell key={slice.categoryId} fill={MIX_COLORS[index % MIX_COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#090d16', borderColor: '#334155', borderRadius: '12px', fontSize: '12px' }}
+                    formatter={(value: any) => [plural(Number(value), 'atendimento', 'atendimentos'), 'Total']}
+                  />
+                  <Legend
+                    verticalAlign="bottom"
+                    height={36}
+                    formatter={(value) => <span className="text-[11px] text-slate-300">{value}</span>}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <EmptyState
+              icon={<Smile className="w-5 h-5" />}
+              title="Você ainda não tem procedimentos concluídos"
+              text="Depois do seu primeiro atendimento, mostramos aqui as categorias que você mais faz."
+              actionLabel="Agendar"
+              onAction={onNavigateToBooking}
+            />
+          )}
         </div>
       </div>
 
-      {/* Ciclo Recomendado de Retoques e Manutenções Estéticas */}
+      {/* Cronograma preventivo: intervalo definido pela clínica + seu último atendimento */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3">
         <h4 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2">
           <Sparkles className="w-3.5 h-3.5 text-rose-400" />
           Seu Cronograma Preventivo de Manutenções
         </h4>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-1">
-            <div className="flex items-center justify-between text-xs font-semibold text-white">
-              <span>Toxina Botulínica</span>
-              <span className="text-indigo-400 text-[10px]">Em 4 meses</span>
-            </div>
-            <p className="text-[11px] text-slate-400">
-              Ciclo ideal a cada 4 a 6 meses para prevenir novas rugas dinâmicas.
-            </p>
-          </div>
 
-          <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-1">
-            <div className="flex items-center justify-between text-xs font-semibold text-white">
-              <span>Limpeza de Pele Profunda</span>
-              <span className="text-emerald-400 text-[10px]">A cada 30 dias</span>
-            </div>
-            <p className="text-[11px] text-slate-400">
-              Renovação celular e desobstrução dos poros para melhor absorção de séruns.
-            </p>
+        {schedule.length > 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {schedule.map((item) => {
+              const style = DUE_STYLE[item.status];
+              return (
+                <div key={item.serviceId} className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2 flex flex-col">
+                  <div className="flex items-start justify-between gap-2 text-xs font-semibold text-white">
+                    <span>{item.name}</span>
+                    <span className={`shrink-0 text-[10px] px-2 py-0.5 rounded-full border ${style.badge}`}>{style.label}</span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    {dueText(item)} · retorno {intervalText(item.intervalDays)}. Último atendimento em{' '}
+                    {new Date(`${item.lastDoneKey}T12:00:00Z`).toLocaleDateString('pt-BR', { timeZone: 'UTC' })}.
+                  </p>
+                  <button
+                    onClick={() => onBookService(item.serviceId)}
+                    className="mt-auto self-start px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-[11px] font-semibold flex items-center gap-1.5 transition-colors"
+                  >
+                    <CalendarPlus className="w-3.5 h-3.5" />
+                    Agendar retorno
+                  </button>
+                </div>
+              );
+            })}
           </div>
-
-          <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-1">
-            <div className="flex items-center justify-between text-xs font-semibold text-white">
-              <span>Laser Soprano Titanium</span>
-              <span className="text-rose-400 text-[10px]">3 de 6 concluídas</span>
-            </div>
-            <p className="text-[11px] text-slate-400">
-              Intervalo ideal de 30 a 45 dias entre sessões para atingir a fase anágena.
-            </p>
-          </div>
-        </div>
+        ) : completedCount === 0 ? (
+          <EmptyState
+            icon={<Sparkles className="w-5 h-5" />}
+            title="Seu cronograma ainda está vazio"
+            text="Depois do seu primeiro atendimento, avisamos aqui quando for a hora de voltar."
+            actionLabel="Agendar"
+            onAction={onNavigateToBooking}
+          />
+        ) : (
+          <EmptyState
+            icon={<CheckCircle2 className="w-5 h-5" />}
+            title="Nenhum retorno recomendado por enquanto"
+            text="Quando algum procedimento seu estiver perto da hora de repetir, ele aparece aqui."
+          />
+        )}
       </div>
     </div>
   );

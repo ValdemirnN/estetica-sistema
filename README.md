@@ -8,7 +8,7 @@ Sistema de agendamento online, multi-clínica, com:
 - **Sem prontuário**: o sistema guarda só o cadastro básico do cliente (nome, contato, CPF/nascimento opcionais) e o agendamento, conforme a **LGPD (Lei 13.709/2018)**; nenhum dado de saúde;
 - **Agenda da equipe** por dia/semana/mês, com filtro por profissional, remarcação, repetição semanal, troca de situação e lembrete por WhatsApp;
 - Fila de notificações transacionais com **Meta WhatsApp Cloud API Oficial** e fallback via e-mail (**Resend**);
-- Dashboards com **Recharts** com controle de privacidade (Faturamento financeiro restrito ao Dono/Admin e métricas de autocuidado para o cliente).
+- Dashboards com **Recharts** com controle de privacidade (Faturamento financeiro restrito ao Dono/Admin e, para o cliente, um painel calculado só dos próprios atendimentos: frequência dos últimos 6 meses, mix por categoria e cronograma de retornos definido pelo dono em cada procedimento).
 
 ---
 
@@ -36,6 +36,7 @@ Para uma instalação de uma clínica só, use `VITE_DEFAULT_CLINIC_SLUG`.
    2. `supabase/migrations/20261116000100_app_integration.sql`
    3. `supabase/migrations/20261117000100_multi_clinic.sql` — multi-clínica. Se você já tinha a clínica única funcionando, ela vira a clínica `aesthetiq`, com todos os dados e papéis preservados. Também cria o bucket de imagens `clinic-assets`.
    4. `supabase/migrations/20261118000100_sem_prontuario_agenda_clientes.sql` — remove prontuário/anamnese (LGPD) e cria a agenda da equipe e o cadastro de clientes. **Apaga** as tabelas de anamnese: exporte antes se precisar.
+   5. `supabase/migrations/20261119000100_intervalo_retorno.sql` — campo "retorno recomendado (dias)" em cada procedimento, usado no cronograma preventivo do cliente.
 2. **Variáveis:** copie `.env.example` para `.env` e preencha `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY` (chave **anon**, nunca a `service_role`).
 3. **Rodar:** `npm install && npm run dev`.
 4. **Você, dono da plataforma** — crie uma conta pelo app e, no SQL Editor:
@@ -59,7 +60,6 @@ Para uma instalação de uma clínica só, use `VITE_DEFAULT_CLINIC_SLUG`.
 
 ### Limitações conhecidas
 - Fuso fixo em America/Sao_Paulo para todas as clínicas.
-- A tela "Meu Dashboard" do cliente ainda mostra dados ilustrativos (gráficos e "Nível Gold VIP"), herdados do protótipo.
 - O envio automático de **WhatsApp** ainda não existe: a fila grava os avisos e `/api/notify/reminders` envia por **e-mail** (Resend); avisos de WhatsApp caem para e-mail quando o cliente aceitou e-mail. A equipe também pode usar o botão “Lembrete” da agenda (abre o WhatsApp com a mensagem pronta).
 - O cron padrão em `vercel.json` roda **1x por dia** (limite do plano gratuito da Vercel). Para lembretes mais pontuais, use o plano Pro ou chame a rota a cada 10–15 min por um agendador externo.
 

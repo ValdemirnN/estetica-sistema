@@ -1,5 +1,6 @@
 import React, { Suspense, lazy, useState } from 'react';
 import {
+  AgendaStatus,
   Service,
   ServiceCategory,
   Professional,
@@ -17,7 +18,8 @@ import {
   formatLocalTime,
   TimeSlot
 } from '../../services/slotCalculator';
-import { ViewFallback } from '../ViewFallback';
+import { DashboardSkeleton } from './DashboardSkeleton';
+import { LoadErrorBoundary } from '../StateBlocks';
 import {
   Calendar,
   Clock,
@@ -49,6 +51,9 @@ interface ClientViewProps {
   busyBlocks: BusyBlock[]; // horários ocupados de todos os clientes (sem dados pessoais)
   leaves: Leave[];
   settings: ClinicSettings;
+  agendaStatus: AgendaStatus;
+  /** Recarrega os agendamentos (botão "Tentar de novo"). */
+  onRetryAgenda: () => void;
   /** Retorna o id do agendamento criado, ou null se falhou (o App já mostra o motivo). */
   onBookAppointment: (input: BookingInput) => Promise<string | null>;
   onCancelAppointment: (aptId: string, reason: string) => Promise<boolean>;
@@ -67,6 +72,8 @@ export function ClientView({
   busyBlocks,
   leaves,
   settings,
+  agendaStatus,
+  onRetryAgenda,
   onBookAppointment,
   onCancelAppointment,
   onExportData
@@ -231,21 +238,32 @@ export function ClientView({
 
       {/* ================= ABA 0: DASHBOARD PESSOAL DO CLIENTE ================= */}
       {activeTab === 'dashboard' && !selectedService && (
-        <Suspense fallback={<ViewFallback />}>
-          <ClientDashboard
-            currentUser={currentUser}
-            appointments={appointments}
-            services={services}
-            professionals={professionals}
-            onNavigateToBooking={() => {
-              setActiveTab('catalog');
-              setSelectedService(null);
-            }}
-            onNavigateToAppointments={() => {
-              setActiveTab('my-appointments');
-            }}
-          />
-        </Suspense>
+        <LoadErrorBoundary>
+          <Suspense fallback={<DashboardSkeleton />}>
+            <ClientDashboard
+              currentUser={currentUser}
+              appointments={appointments}
+              categories={categories}
+              services={services}
+              professionals={professionals}
+              agendaStatus={agendaStatus}
+              onRetry={onRetryAgenda}
+              onNavigateToBooking={() => {
+                setActiveTab('catalog');
+                setSelectedService(null);
+              }}
+              onNavigateToAppointments={() => {
+                setActiveTab('my-appointments');
+              }}
+              onBookService={(serviceId) => {
+                const service = catalogServices.find((s) => s.id === serviceId);
+                setActiveTab('catalog');
+                if (service) handleStartBooking(service);
+                else setSelectedService(null);
+              }}
+            />
+          </Suspense>
+        </LoadErrorBoundary>
       )}
 
       {/* ================= ABA 1: CATÁLOGO & AGENDAMENTO ================= */}

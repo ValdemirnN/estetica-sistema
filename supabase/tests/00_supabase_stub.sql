@@ -12,7 +12,7 @@ alter default privileges in schema public grant all on tables to anon, authentic
 alter default privileges in schema public grant all on functions to anon, authenticated;
 alter default privileges in schema public grant all on sequences to anon, authenticated;
 create schema storage;
-create table storage.buckets (id text primary key, name text, public boolean);
+create table storage.buckets (id text primary key, name text, public boolean, file_size_limit bigint, allowed_mime_types text[]);
 create table storage.objects (id uuid default gen_random_uuid() primary key, bucket_id text, name text, owner uuid);
 alter table storage.objects enable row level security;
 create function storage.foldername(name text) returns text[] language sql immutable as $$ select string_to_array(name,'/') $$;

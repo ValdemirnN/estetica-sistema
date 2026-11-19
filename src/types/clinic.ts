@@ -4,6 +4,9 @@ export type AppointmentStatus = 'PENDING' | 'CONFIRMED' | 'COMPLETED' | 'CANCELL
 
 export type DayOfWeek = 0 | 1 | 2 | 3 | 4 | 5 | 6; // 0=Sunday, 1=Monday...
 
+/** Situação do carregamento dos agendamentos (usada para mostrar "Tentar de novo"). */
+export type AgendaStatus = 'ready' | 'refreshing' | 'error';
+
 export type NotificationChannel = 'WHATSAPP' | 'EMAIL';
 
 export type NotificationStatus = 'QUEUED' | 'SENT' | 'FAILED' | 'DELIVERED' | 'READ';
@@ -44,6 +47,8 @@ export interface Service {
   recoveryInfo: string;
   imageUrl?: string;
   badge?: string;
+  /** Dias entre um atendimento e o retorno recomendado (definido pelo dono). Sem valor = sem retorno. */
+  returnIntervalDays?: number;
   isActive: boolean;
 }
 

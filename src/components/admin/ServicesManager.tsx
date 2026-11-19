@@ -24,6 +24,7 @@ const emptyService = (categoryId: string, professionals: Professional[]): Servic
   recoveryInfo: '',
   badge: '',
   imageUrl: '',
+  returnIntervalDays: null,
   isActive: true,
   professionalIds: professionals.filter((p) => p.isActive).map((p) => p.id)
 });
@@ -55,6 +56,7 @@ export function ServicesManager({ clinicId, categories, services, professionals,
       recoveryInfo: s.recoveryInfo,
       badge: s.badge ?? '',
       imageUrl: s.imageUrl ?? '',
+      returnIntervalDays: s.returnIntervalDays ?? null,
       isActive: s.isActive,
       professionalIds: professionals.filter((p) => p.specialtyServiceIds.includes(s.id)).map((p) => p.id)
     });
@@ -86,6 +88,10 @@ export function ServicesManager({ clinicId, categories, services, professionals,
     if (!Number.isInteger(serviceForm.durationMinutes) || serviceForm.durationMinutes < 5) {
       return setError('A duração deve ser de pelo menos 5 minutos.');
     }
+    const ret = serviceForm.returnIntervalDays;
+    if (ret !== null && (!Number.isInteger(ret) || ret < 1 || ret > 730)) {
+      return setError('O retorno recomendado deve ser entre 1 e 730 dias (ou deixe em branco).');
+    }
     const payload = { ...serviceForm, priceCents: Math.round(price * 100) };
     run(
       () => saveService(clinicId, payload),
@@ -111,6 +117,7 @@ export function ServicesManager({ clinicId, categories, services, professionals,
         recoveryInfo: s.recoveryInfo,
         badge: s.badge ?? '',
         imageUrl: s.imageUrl ?? '',
+        returnIntervalDays: s.returnIntervalDays ?? null,
         isActive: !s.isActive,
         professionalIds: professionals.filter((p) => p.specialtyServiceIds.includes(s.id)).map((p) => p.id)
       });
@@ -374,6 +381,21 @@ export function ServicesManager({ clinicId, categories, services, professionals,
                 value={serviceForm.description}
                 onChange={(e) => setServiceForm({ ...serviceForm, description: e.target.value })}
                 className={inputClass + ' resize-y'}
+              />
+            </Field>
+            <Field label="Retorno recomendado, em dias (opcional)" hint="Ex.: 30 para limpeza de pele. O cliente vê o lembrete de retorno no painel dele.">
+              <input
+                type="number"
+                inputMode="numeric"
+                min={1}
+                max={730}
+                step={1}
+                value={serviceForm.returnIntervalDays ?? ''}
+                onChange={(e) =>
+                  setServiceForm({ ...serviceForm, returnIntervalDays: e.target.value === '' ? null : Number(e.target.value) })
+                }
+                placeholder="Sem retorno"
+                className={inputClass}
               />
             </Field>
             <Field label="Orientações pós-procedimento (opcional)" className="sm:col-span-2" hint="Aparece para o cliente na confirmação do agendamento.">

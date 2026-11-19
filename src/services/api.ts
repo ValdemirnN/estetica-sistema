@@ -221,6 +221,7 @@ export async function fetchCatalog(clinicId: string): Promise<Catalog> {
         recoveryInfo: s.recovery_info ?? '',
         imageUrl: s.image_url ?? undefined,
         badge: s.badge ?? undefined,
+        returnIntervalDays: s.return_interval_days ?? undefined,
         isActive: s.is_active
       })
     ),
@@ -408,6 +409,8 @@ export interface ServiceInput {
   recoveryInfo: string;
   badge: string;
   imageUrl: string;
+  /** Retorno recomendado em dias; null = sem retorno. */
+  returnIntervalDays: number | null;
   isActive: boolean;
   /** Profissionais que realizam este procedimento (sem isso, ele não aparece com horários). */
   professionalIds: string[];
@@ -451,6 +454,7 @@ export async function saveService(clinicId: string, s: ServiceInput): Promise<vo
     recovery_info: s.recoveryInfo.trim() || null,
     badge: s.badge.trim() || null,
     image_url: s.imageUrl || null,
+    return_interval_days: s.returnIntervalDays,
     is_active: s.isActive
   };
 
