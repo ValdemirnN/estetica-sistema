@@ -145,6 +145,55 @@ export async function fetchProfile(userId: string, role: UserRole): Promise<User
   };
 }
 
+export interface MyProfileInput {
+  fullName: string;
+  phone: string;
+  optInWhatsapp: boolean;
+  optInEmail: boolean;
+}
+
+/** Cliente edita o próprio nome, telefone e preferências de aviso (validado no banco). */
+export async function updateMyProfile(input: MyProfileInput): Promise<void> {
+  const { error } = await supabase.rpc('update_my_profile', {
+    p_full_name: input.fullName,
+    p_phone: input.phone,
+    p_opt_in_whatsapp: input.optInWhatsapp,
+    p_opt_in_email: input.optInEmail
+  });
+  if (error) fail(error, 'Cadastro');
+}
+
+export interface DeletionRequest {
+  id: string;
+  status: 'PENDING' | 'CANCELLED' | 'DONE';
+  requestedAt: string;
+}
+
+/** Pedido de exclusão pendente (LGPD) do cliente nesta clínica, ou null. */
+export async function fetchMyDeletionRequest(clinicId: string): Promise<DeletionRequest | null> {
+  const { data, error } = await supabase
+    .from('account_deletion_requests')
+    .select('id, status, requested_at')
+    .eq('clinic_id', clinicId)
+    .eq('status', 'PENDING')
+    .maybeSingle();
+  if (error) fail(error, 'Pedido de exclusão');
+  return data ? { id: data.id, status: data.status, requestedAt: data.requested_at } : null;
+}
+
+export async function requestAccountDeletion(clinicId: string, reason: string): Promise<void> {
+  const { error } = await supabase.rpc('request_account_deletion', {
+    p_clinic_id: clinicId,
+    p_reason: reason.trim() || null
+  });
+  if (error) fail(error, 'Pedido de exclusão');
+}
+
+export async function cancelAccountDeletionRequest(clinicId: string): Promise<void> {
+  const { error } = await supabase.rpc('cancel_account_deletion_request', { p_clinic_id: clinicId });
+  if (error) fail(error, 'Pedido de exclusão');
+}
+
 // ---------------------------------------------------------------------------
 // Catálogo, profissionais, configurações (leitura liberada a membros da clínica)
 // ---------------------------------------------------------------------------
@@ -899,6 +948,23 @@ export async function rescheduleAppointment(
   professionalId: string | null
 ): Promise<void> {
   const { error } = await supabase.rpc('reschedule_appointment', {
+    p_appointment_id: appointmentId,
+    p_start_time: startIso,
+    p_professional_id: professionalId
+  });
+  if (error) fail(error, 'Remarcação');
+}
+
+/**
+ * Cliente remarca o PRÓPRIO agendamento. A antecedência mínima da clínica, a jornada, as ausências e o
+ * conflito de horário são validados no banco (reschedule_my_appointment). Erro '23P01' = horário tomado.
+ */
+export async function rescheduleMyAppointment(
+  appointmentId: string,
+  startIso: string,
+  professionalId: string | null
+): Promise<void> {
+  const { error } = await supabase.rpc('reschedule_my_appointment', {
     p_appointment_id: appointmentId,
     p_start_time: startIso,
     p_professional_id: professionalId
