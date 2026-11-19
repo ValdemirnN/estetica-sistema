@@ -216,3 +216,26 @@ export interface ClientRecord {
   /** Observação interna da equipe (o cliente não vê). */
   staffNotes: string;
 }
+
+export type WaitlistStatus = 'WAITING' | 'CONTACTED' | 'BOOKED' | 'CANCELLED';
+
+export type WaitlistPeriod = 'ANY' | 'MORNING' | 'AFTERNOON' | 'EVENING';
+
+/** Pedido de horário de um cliente que não encontrou vaga (sem dados de saúde). */
+export interface WaitlistEntry {
+  id: string;
+  clientId: string;
+  clientName: string;
+  clientPhone: string;
+  serviceId: string;
+  serviceName: string;
+  /** Sem valor = qualquer profissional. */
+  professionalId?: string;
+  professionalName?: string;
+  desiredFrom?: string; // 'YYYY-MM-DD'
+  desiredTo?: string;   // 'YYYY-MM-DD'
+  period: WaitlistPeriod;
+  notes: string;
+  status: WaitlistStatus;
+  createdAt: string;
+}

@@ -40,6 +40,7 @@ Para uma instalação de uma clínica só, use `VITE_DEFAULT_CLINIC_SLUG`.
    6. `supabase/migrations/20261120000100_onboarding_dono.sql` — **Fase 3, onboarding do dono**: "carregar modelo" (categorias, procedimentos de exemplo **inativos** e horários padrão), checklist "Primeiros passos" e **link de agendamento fechado até o dono publicar**. Clínicas que já existiam continuam abertas; as novas nascem fechadas.
    7. `supabase/migrations/20261121000100_area_cliente.sql` — **Fase 4, área do cliente**: o cliente remarca o próprio agendamento (`reschedule_my_appointment`, com a antecedência mínima da clínica validada no banco), edita nome/telefone/preferências de aviso (`update_my_profile`) e pede a exclusão da conta pela LGPD (`request_account_deletion`; o pedido fica visível à equipe em `account_deletion_requests`, e a anonimização é feita pela clínica/plataforma). O botão "Adicionar ao calendário" (.ics) e "Agendar novamente" funcionam só no front.
    8. `supabase/migrations/20261122000100_notificacoes.sql` — **Fase 5, notificações**: status `SKIPPED`, controle de tentativas, idempotência (aviso idêntico não é duplicado), lembrete de **2h** (criado junto com a confirmação/remarcação; agendamentos futuros já existentes recebem o de 2h na primeira execução) e a fila do worker (`claim_notifications`, só `service_role`). A equipe reenvia avisos com falha por `staff_requeue_notification`.
+   9. `supabase/migrations/20261123000100_gestao_dono.sql` — **Fase 6, gestão do dono**: percentual de **comissão** por profissional (tabela `professional_commissions`, só o administrador lê e grava, por `admin_list_commissions` / `admin_set_commission`) e **lista de espera** (`waitlist_entries`, pela equipe, em `staff_list_waitlist` / `staff_add_waitlist` / `staff_set_waitlist_status`). Os relatórios em si não precisam de tabela: são calculados no app a partir dos agendamentos.
 2. **Variáveis:** copie `.env.example` para `.env` e preencha `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY` (chave **anon**, nunca a `service_role`).
 3. **Rodar:** `npm install && npm run dev`.
 4. **Você, dono da plataforma** — crie uma conta pelo app e, no SQL Editor:
@@ -150,3 +151,19 @@ Em `npm run dev` as rotas `/api` não existem; use `vercel dev` para testá-las.
 **Sobreposição:** o banco não aceita dois atendimentos sobrepostos da mesma profissional (`EXCLUDE`), então não há “encaixe” sobreposto. A duração segue a do procedimento.
 
 **Testes do banco:** `supabase/tests/onboarding_dono_test.sql` (Fase 3) e `supabase/tests/sem_prontuario_agenda_test.sql` (rode depois das migrations, como descrito em `supabase/tests/README.md`).
+
+---
+
+## 📊 Gestão do dono (Fase 6)
+
+**Aba "Relatórios"** (somente o administrador, por conter faturamento e comissão): escolha o período (hoje, 7/30/90 dias, este mês, mês passado, este ano ou datas livres) e veja, com comparação contra o período anterior de mesmo tamanho:
+faturamento (e o previsto), atendimentos, ticket médio, no-show, faturamento por dia/semana/mês, clientes novos x recorrentes, top procedimentos, e por profissional: atendimentos, faltas, faturamento, ticket médio e **ocupação**.
+A **comissão** de cada profissional (percentual editável na própria tela) é calculada sobre o faturamento do período. Exportações **CSV** (Excel em português: `;` como separador, UTF-8 e vírgula decimal): resumo, atendimentos, procedimentos, profissionais e comissões. Nomes que começam com `=`, `+`, `-` ou `@` são protegidos contra injeção de fórmula.
+
+**Aba "Relacionamento"** (toda a equipe, sem valores financeiros):
+- **Clientes inativos**: sem atendimento concluído há 60 dias ou mais (ajustável: 30–180) e sem horário marcado; atalho de WhatsApp e de agendamento; CSV.
+- **Aniversariantes**: próximos 30 dias ou por mês, com WhatsApp; 29/02 é comemorado em 28/02 nos anos não bissextos; CSV.
+- **Lista de espera**: cliente + procedimento + profissional/período/datas desejadas; marcar como contatado, agendar, concluir ou remover.
+
+**Regras de cálculo** (iguais na tela e no CSV): faturamento = atendimentos **concluídos**; ticket médio = faturamento ÷ concluídos; no-show = faltas ÷ (concluídos + faltas), sem contar cancelamentos; ocupação = minutos reservados (sem cancelados) ÷ minutos de jornada sem o almoço (folgas e bloqueios cadastrados **não** são descontados); cliente novo = primeiro atendimento concluído caiu no período. Datas no horário de Brasília.
+Os relatórios usam os agendamentos já carregados pelo painel (histórico completo da clínica); para clínicas com muitos anos de histórico, vale paginar por período no futuro.

@@ -24,3 +24,5 @@ Depois da migration `20261118000100`, rode `PGTZ=America/Sao_Paulo psql teste -f
 Depois da migration `20261121000100` (Fase 4), rode `PGTZ=America/Sao_Paulo psql teste -f area_cliente_test.sql` num banco recém-criado (remarcação pelo cliente, antecedência mínima, edição de cadastro e pedido de exclusão).
 
 Depois da migration `20261122000100` (Fase 5), rode `PGTZ=America/Sao_Paulo psql teste -f notificacoes_test.sql` num banco recém-criado (aviso de 2h, idempotência, fila do worker com `claim_notifications`, reenvio pela equipe e limpeza ao cancelar).
+
+Depois da migration `20261123000100` (Fase 6), rode `PGTZ=America/Sao_Paulo psql teste -f gestao_dono_test.sql` num banco recém-criado (comissão só para o admin, limites de 0–100%, lista de espera só para a equipe, duplicidade e andamento do pedido). Cada linha mostra o resultado; `UNEXPECTEDLY-OK` em linha de bloqueio seria falha.

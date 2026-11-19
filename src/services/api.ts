@@ -17,6 +17,9 @@ import {
   TeamMember,
   UserProfile,
   UserRole,
+  WaitlistEntry,
+  WaitlistPeriod,
+  WaitlistStatus,
   WorkingHours
 } from '../types/clinic';
 
@@ -1092,4 +1095,80 @@ export async function fetchNotifications(clinicId: string): Promise<Notification
 export async function requeueNotification(id: string): Promise<void> {
   const { error } = await supabase.rpc('staff_requeue_notification', { p_id: id });
   if (error) fail(error, 'Reenvio do aviso');
+}
+
+// ---------------------------------------------------------------------------
+// Gestão do dono (Fase 6): comissão e lista de espera
+// ---------------------------------------------------------------------------
+
+/** Percentual de comissão por profissional (somente ADMIN; o banco recusa os demais). */
+export async function fetchCommissions(clinicId: string): Promise<Map<string, number>> {
+  const { data, error } = await supabase.rpc('admin_list_commissions', { p_clinic_id: clinicId });
+  if (error) fail(error, 'Comissões');
+  return new Map((data ?? []).map((r: any) => [r.professional_id as string, Number(r.commission_pct)]));
+}
+
+export async function saveCommission(clinicId: string, professionalId: string, pct: number): Promise<void> {
+  const { error } = await supabase.rpc('admin_set_commission', {
+    p_clinic_id: clinicId,
+    p_professional_id: professionalId,
+    p_pct: pct
+  });
+  if (error) fail(error, 'Comissão');
+}
+
+export async function fetchWaitlist(clinicId: string): Promise<WaitlistEntry[]> {
+  const { data, error } = await supabase.rpc('staff_list_waitlist', { p_clinic_id: clinicId });
+  if (error) fail(error, 'Lista de espera');
+  return (data ?? []).map(
+    (r: any): WaitlistEntry => ({
+      id: r.id,
+      clientId: r.client_id,
+      clientName: r.client_name ?? 'Cliente',
+      clientPhone: r.client_phone ?? '',
+      serviceId: r.service_id,
+      serviceName: r.service_name ?? 'Procedimento',
+      professionalId: r.professional_id ?? undefined,
+      professionalName: r.professional_name ?? undefined,
+      desiredFrom: r.desired_from ?? undefined,
+      desiredTo: r.desired_to ?? undefined,
+      period: r.period as WaitlistPeriod,
+      notes: r.notes ?? '',
+      status: r.status as WaitlistStatus,
+      createdAt: r.created_at
+    })
+  );
+}
+
+export interface WaitlistInput {
+  clientId: string;
+  serviceId: string;
+  professionalId?: string;
+  desiredFrom?: string;
+  desiredTo?: string;
+  period: WaitlistPeriod;
+  notes: string;
+}
+
+export async function addToWaitlist(clinicId: string, input: WaitlistInput): Promise<void> {
+  const { error } = await supabase.rpc('staff_add_waitlist', {
+    p_clinic_id: clinicId,
+    p_client_id: input.clientId,
+    p_service_id: input.serviceId,
+    p_professional_id: input.professionalId || null,
+    p_desired_from: input.desiredFrom || null,
+    p_desired_to: input.desiredTo || null,
+    p_period: input.period,
+    p_notes: input.notes
+  });
+  if (error) fail(error, 'Lista de espera');
+}
+
+export async function setWaitlistStatus(clinicId: string, id: string, status: WaitlistStatus): Promise<void> {
+  const { error } = await supabase.rpc('staff_set_waitlist_status', {
+    p_clinic_id: clinicId,
+    p_id: id,
+    p_status: status
+  });
+  if (error) fail(error, 'Lista de espera');
 }

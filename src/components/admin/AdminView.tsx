@@ -17,6 +17,7 @@ import { ServicesManager } from './ServicesManager';
 import { ProfessionalsManager } from './ProfessionalsManager';
 import { ClinicSettingsPanel } from './ClinicSettingsPanel';
 import { SetupChecklist } from './SetupChecklist';
+import { RelationshipPanel } from './RelationshipPanel';
 import { StaffScheduler } from '../clinic/StaffScheduler';
 import { ClientsList } from '../clinic/ClientsList';
 import { NewClientModal } from '../clinic/NewClientModal';
@@ -27,7 +28,9 @@ import {
   Settings,
   UserRound,
   Tag,
-  BarChart3
+  BarChart3,
+  FileBarChart,
+  HeartHandshake
 } from 'lucide-react';
 
 interface AdminViewProps {
@@ -51,10 +54,11 @@ interface AdminViewProps {
   onSaveClientNotes: (clientId: string, notes: string) => Promise<void>;
 }
 
-type AdminTab = 'dashboard' | 'calendar' | 'services' | 'professionals' | 'clients' | 'settings';
+type AdminTab = 'dashboard' | 'reports' | 'calendar' | 'services' | 'professionals' | 'clients' | 'relationship' | 'settings';
 
 // O dashboard carrega o recharts: fica em chunk próprio.
 const AdminDashboard = lazy(() => import('./AdminDashboard').then((m) => ({ default: m.AdminDashboard })));
+const ReportsPanel = lazy(() => import('./ReportsPanel').then((m) => ({ default: m.ReportsPanel })));
 
 export function AdminView({
   currentUser,
@@ -84,10 +88,12 @@ export function AdminView({
   const tabs: { id: AdminTab; label: string; icon: React.ReactNode; adminOnly?: boolean }[] = (
     [
       { id: 'dashboard', label: 'Dashboard & Indicadores', icon: <BarChart3 className="w-3.5 h-3.5" /> },
+      { id: 'reports', label: 'Relatórios', icon: <FileBarChart className="w-3.5 h-3.5" />, adminOnly: true },
       { id: 'calendar', label: 'Agenda', icon: <CalendarIcon className="w-3.5 h-3.5" /> },
       { id: 'services', label: 'Procedimentos & Preços', icon: <Tag className="w-3.5 h-3.5" />, adminOnly: true },
       { id: 'professionals', label: 'Profissionais & Horários', icon: <Users className="w-3.5 h-3.5" />, adminOnly: true },
       { id: 'clients', label: 'Clientes', icon: <UserRound className="w-3.5 h-3.5" /> },
+      { id: 'relationship', label: 'Relacionamento', icon: <HeartHandshake className="w-3.5 h-3.5" /> },
       { id: 'settings', label: 'Minha Clínica', icon: <Settings className="w-3.5 h-3.5" />, adminOnly: true }
     ] as { id: AdminTab; label: string; icon: React.ReactNode; adminOnly?: boolean }[]
   ).filter((t) => isAdmin || !t.adminOnly);
@@ -142,6 +148,19 @@ export function AdminView({
             appointments={appointments}
             professionals={professionals}
             services={services}
+          />
+        </Suspense>
+      )}
+
+      {/* ================= ABA: RELATÓRIOS (financeiro: só o dono) ================= */}
+      {activeTab === 'reports' && isAdmin && (
+        <Suspense fallback={<ViewFallback />}>
+          <ReportsPanel
+            clinicId={clinicId}
+            appointments={appointments}
+            professionals={professionals}
+            services={services}
+            notify={notify}
           />
         </Suspense>
       )}
@@ -204,6 +223,27 @@ export function AdminView({
             }}
             onSaveNotes={onSaveClientNotes}
             notify={notify}
+          />
+          {showNewClient && <NewClientModal onClose={() => setShowNewClient(false)} onCreate={onCreateClient} />}
+        </>
+      )}
+
+      {/* ================= ABA: RELACIONAMENTO (inativos, aniversariantes, lista de espera) ================= */}
+      {activeTab === 'relationship' && (
+        <>
+          <RelationshipPanel
+            clinicId={clinicId}
+            clinicName={settings.name}
+            clients={clients}
+            appointments={appointments}
+            services={services}
+            professionals={professionals}
+            notify={notify}
+            onBook={(id) => {
+              setPresetClientId(id);
+              setActiveTab('calendar');
+            }}
+            onNewClient={() => setShowNewClient(true)}
           />
           {showNewClient && <NewClientModal onClose={() => setShowNewClient(false)} onCreate={onCreateClient} />}
         </>
