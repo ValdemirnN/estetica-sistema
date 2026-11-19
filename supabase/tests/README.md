@@ -22,3 +22,5 @@ Depois da migration `20261119000100`, rode `psql teste -f intervalo_retorno_test
 Depois da migration `20261118000100`, rode `PGTZ=America/Sao_Paulo psql teste -f sem_prontuario_agenda_test.sql` (o fuso é necessário: o teste usa horários de Brasília; rode num banco recém-criado, pois ele agenda de verdade) (remarcação, clientes, anamnese removida). Ele traz seus próprios helpers e usa o legado de `01_seed_legacy.sql`.
 
 Depois da migration `20261121000100` (Fase 4), rode `PGTZ=America/Sao_Paulo psql teste -f area_cliente_test.sql` num banco recém-criado (remarcação pelo cliente, antecedência mínima, edição de cadastro e pedido de exclusão).
+
+Depois da migration `20261122000100` (Fase 5), rode `PGTZ=America/Sao_Paulo psql teste -f notificacoes_test.sql` num banco recém-criado (aviso de 2h, idempotência, fila do worker com `claim_notifications`, reenvio pela equipe e limpeza ao cancelar).

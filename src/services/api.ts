@@ -1079,6 +1079,17 @@ export async function fetchNotifications(clinicId: string): Promise<Notification
     scheduledFor: n.scheduled_for,
     sentAt: n.sent_at ?? undefined,
     errorMessage: n.error_message ?? undefined,
-    payload: n.payload ?? {}
+    payload: n.payload ?? {},
+    retryCount: n.retry_count ?? 0,
+    fallbackFrom: n.fallback_from ?? undefined,
+    deliveredAt: n.delivered_at ?? undefined,
+    readAt: n.read_at ?? undefined,
+    lastAttemptAt: n.last_attempt_at ?? undefined
   }));
+}
+
+/** Equipe recoloca na fila um aviso que falhou ou foi descartado (o banco confere se ainda faz sentido). */
+export async function requeueNotification(id: string): Promise<void> {
+  const { error } = await supabase.rpc('staff_requeue_notification', { p_id: id });
+  if (error) fail(error, 'Reenvio do aviso');
 }

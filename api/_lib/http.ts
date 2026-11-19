@@ -6,10 +6,12 @@ export interface Req {
   method?: string;
   headers: Record<string, string | string[] | undefined>;
   body?: any;
+  query?: Record<string, string | string[] | undefined>;
 }
 export interface Res {
   status(code: number): Res;
   json(body: unknown): void;
+  send(body: string): void;
   setHeader(name: string, value: string): void;
 }
 

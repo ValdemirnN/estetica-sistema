@@ -9,7 +9,7 @@ export type AgendaStatus = 'ready' | 'refreshing' | 'error';
 
 export type NotificationChannel = 'WHATSAPP' | 'EMAIL';
 
-export type NotificationStatus = 'QUEUED' | 'SENT' | 'FAILED' | 'DELIVERED' | 'READ';
+export type NotificationStatus = 'QUEUED' | 'SENT' | 'FAILED' | 'DELIVERED' | 'READ' | 'SKIPPED';
 
 export interface UserProfile {
   id: string;
@@ -126,6 +126,13 @@ export interface NotificationLog {
   sentAt?: string;
   errorMessage?: string;
   payload: Record<string, any>;
+  /** Tentativas de envio já feitas (retry). */
+  retryCount: number;
+  /** Canal original quando o aviso foi desviado (ex.: WhatsApp -> e-mail). */
+  fallbackFrom?: NotificationChannel;
+  deliveredAt?: string;
+  readAt?: string;
+  lastAttemptAt?: string;
 }
 
 /** Dados públicos da clínica (marca): disponíveis antes do login. */

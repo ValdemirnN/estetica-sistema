@@ -39,6 +39,7 @@ Para uma instalação de uma clínica só, use `VITE_DEFAULT_CLINIC_SLUG`.
    5. `supabase/migrations/20261119000100_intervalo_retorno.sql` — campo "retorno recomendado (dias)" em cada procedimento, usado no cronograma preventivo do cliente.
    6. `supabase/migrations/20261120000100_onboarding_dono.sql` — **Fase 3, onboarding do dono**: "carregar modelo" (categorias, procedimentos de exemplo **inativos** e horários padrão), checklist "Primeiros passos" e **link de agendamento fechado até o dono publicar**. Clínicas que já existiam continuam abertas; as novas nascem fechadas.
    7. `supabase/migrations/20261121000100_area_cliente.sql` — **Fase 4, área do cliente**: o cliente remarca o próprio agendamento (`reschedule_my_appointment`, com a antecedência mínima da clínica validada no banco), edita nome/telefone/preferências de aviso (`update_my_profile`) e pede a exclusão da conta pela LGPD (`request_account_deletion`; o pedido fica visível à equipe em `account_deletion_requests`, e a anonimização é feita pela clínica/plataforma). O botão "Adicionar ao calendário" (.ics) e "Agendar novamente" funcionam só no front.
+   8. `supabase/migrations/20261122000100_notificacoes.sql` — **Fase 5, notificações**: status `SKIPPED`, controle de tentativas, idempotência (aviso idêntico não é duplicado), lembrete de **2h** (criado junto com a confirmação/remarcação; agendamentos futuros já existentes recebem o de 2h na primeira execução) e a fila do worker (`claim_notifications`, só `service_role`). A equipe reenvia avisos com falha por `staff_requeue_notification`.
 2. **Variáveis:** copie `.env.example` para `.env` e preencha `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY` (chave **anon**, nunca a `service_role`).
 3. **Rodar:** `npm install && npm run dev`.
 4. **Você, dono da plataforma** — crie uma conta pelo app e, no SQL Editor:
@@ -64,8 +65,34 @@ Para uma instalação de uma clínica só, use `VITE_DEFAULT_CLINIC_SLUG`.
 
 ### Limitações conhecidas
 - Fuso fixo em America/Sao_Paulo para todas as clínicas.
-- O envio automático de **WhatsApp** ainda não existe: a fila grava os avisos e `/api/notify/reminders` envia por **e-mail** (Resend); avisos de WhatsApp caem para e-mail quando o cliente aceitou e-mail. A equipe também pode usar o botão “Lembrete” da agenda (abre o WhatsApp com a mensagem pronta).
-- O cron padrão em `vercel.json` roda **1x por dia** (limite do plano gratuito da Vercel). Para lembretes mais pontuais, use o plano Pro ou chame a rota a cada 10–15 min por um agendador externo.
+- Avisos: o worker envia por **WhatsApp (Cloud API)** e cai para **e-mail** (veja a seção "Notificações"). Sem as variáveis do WhatsApp, tudo sai por e-mail; sem as do e-mail, o aviso falha e fica visível no painel (com botão "Reenviar").
+- O cron da Vercel em `vercel.json` roda **1x por dia** (limite do plano gratuito). Para lembretes de 24h/2h no horário certo, use o workflow `.github/workflows/notify-worker.yml` (a cada 15 min, grátis) ou, no plano Pro, troque o `schedule` do `vercel.json` para `*/15 * * * *`. Rodar os dois é seguro: a reserva dos avisos no banco impede envio duplicado.
+
+---
+
+## 🔔 Notificações (Fase 5)
+
+**Fluxo:** agendar/remarcar grava avisos em `notifications_log` (confirmação imediata, lembrete 24h, lembrete 2h). O worker `/api/notify/reminders` reserva os vencidos, **confere de novo** se o agendamento continua ativo e se o cliente não fez opt-out, e envia:
+
+| Situação | O que acontece |
+|---|---|
+| WhatsApp aceito pela Meta | `SENT`; depois o webhook marca `DELIVERED` / `READ` |
+| Falha temporária (rede, 5xx, limite de taxa) | volta para a fila e tenta de novo após 5, 15 e 45 min (até 4 tentativas) |
+| Falha definitiva ou tentativas esgotadas | **fallback para e-mail** se o cliente aceitou e-mail; senão `FAILED` |
+| Meta avisa depois que a entrega falhou | o aviso é reenviado por e-mail (fallback) |
+| Cliente desligou os avisos / agendamento cancelado / horário passou | `SKIPPED` (descartado, com o motivo no log) |
+
+**Idempotência:** um gatilho no banco descarta avisos idênticos (mesmo agendamento + modelo + horário); o worker reserva lotes com `FOR UPDATE SKIP LOCKED`; o Resend recebe `Idempotency-Key`. Garantia: *pelo menos uma vez* (duplicidade só se o worker cair entre a resposta do provedor e a gravação, e a reserva expirar em 10 min).
+
+### Configurar o WhatsApp (Meta)
+1. No Meta Business Manager, crie 4 modelos **UTILITY**, idioma **Português (BR)**, com **exatamente** estes nomes e as 5 variáveis `{{1}}`…`{{5}}` (1 = primeiro nome, 2 = clínica, 3 = procedimento, 4 = data e hora, 5 = profissional). O texto sugerido de cada um aparece no painel (Central de Comunicação → prévia → "Variáveis enviadas à Meta") e está em `api/_lib/templates.ts`:
+   `appointment_confirmed_instant`, `appointment_rescheduled`, `appointment_reminder_24h`, `appointment_reminder_2h`.
+2. Na Vercel, defina `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VERIFY_TOKEN`, `META_APP_SECRET` (e, para o e-mail, `RESEND_API_KEY` e `EMAIL_FROM`), além de `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` e `CRON_SECRET`.
+3. Na Meta (WhatsApp → Configuration → Webhook): URL `https://SEU-DOMINIO/api/notify/whatsapp-webhook`, token = `WHATSAPP_VERIFY_TOKEN`, assine o campo **messages**.
+4. No GitHub (Settings → Secrets → Actions) crie `APP_URL` e `CRON_SECRET` para o workflow `notify-worker`.
+5. Teste: agende um horário para a própria conta e acompanhe o log em **Central de Comunicação**. Se o modelo não estiver aprovado, a Meta recusa e o aviso cai para e-mail.
+
+**Modelo único para todas as clínicas:** o número/token de WhatsApp é da plataforma (variáveis de ambiente); o nome da clínica vai como variável `{{2}}`.
 
 ---
 

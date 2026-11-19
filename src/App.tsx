@@ -13,6 +13,7 @@ import {
   fetchClients,
   fetchClinicPublic,
   fetchNotifications,
+  requeueNotification,
   fetchProfile,
   isPlatformAdmin,
   joinClinic,
@@ -489,6 +490,17 @@ function ClinicApp({ userId, clinic }: { userId: string; clinic: ClinicBranding 
     }
   };
 
+  // 8b. Equipe reenvia um aviso que falhou
+  const handleRequeueNotification = async (id: string) => {
+    try {
+      await requeueNotification(id);
+      setNotifications(await fetchNotifications(clinicId));
+      showToast('Aviso recolocado na fila. Sai na próxima execução do envio automático.');
+    } catch (e) {
+      showToast(errMsg(e));
+    }
+  };
+
   if (showPlatform && isPlatform) {
     return (
       <Suspense fallback={<ViewFallback />}>
@@ -650,23 +662,14 @@ function ClinicApp({ userId, clinic }: { userId: string; clinic: ClinicBranding 
 
         {mainTab === 'notifications' && isStaff && (
           <NotificationsView
-            sample={(() => {
-              const next = appointments
-                .filter((a) => a.status === 'CONFIRMED' && new Date(a.startTime) >= new Date())
-                .sort((a, b) => a.startTime.localeCompare(b.startTime))[0];
-              if (!next) return null;
-              return {
-                clientName: next.clientName,
-                serviceName: services.find((x) => x.id === next.serviceId)?.name ?? '',
-                professionalName: professionals.find((x) => x.id === next.professionalId)?.name ?? '',
-                startTime: next.startTime
-              };
-            })()}
-            clinicName={settings.name}
-            clinicAddress={settings.address}
             notifications={notifications}
+            appointments={appointments}
+            services={services}
+            professionals={professionals}
+            settings={settings}
             onRefresh={handleRefreshNotifications}
             isRefreshing={isRefreshingNotifs}
+            onRequeue={handleRequeueNotification}
           />
         )}
         </Suspense>
