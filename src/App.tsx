@@ -17,6 +17,9 @@ import {
   isPlatformAdmin,
   joinClinic,
   rescheduleAppointment,
+  rescheduleMyAppointment,
+  updateMyProfile,
+  MyProfileInput,
   saveClientNotes,
   signOut,
   updateAppointmentStatus,
@@ -415,6 +418,27 @@ function ClinicApp({ userId, clinic }: { userId: string; clinic: ClinicBranding 
     }
   };
 
+  // 5a. Cliente remarca o próprio agendamento (antecedência mínima validada no banco)
+  const handleRescheduleMine = async (aptId: string, startIso: string, professionalId: string): Promise<boolean> => {
+    try {
+      await rescheduleMyAppointment(aptId, startIso, professionalId);
+      await refreshAgenda();
+      showToast('Agendamento remarcado! Você receberá a confirmação do novo horário.');
+      return true;
+    } catch (e) {
+      if (e instanceof ApiError && e.code === '23P01') await refreshAgenda().catch(() => {});
+      showToast(errMsg(e));
+      return false;
+    }
+  };
+
+  // 5c. Cliente edita o próprio cadastro; o erro volta para o formulário mostrar.
+  const handleSaveProfile = async (input: MyProfileInput) => {
+    await updateMyProfile(input);
+    const profile = await fetchProfile(userId, currentUser.role);
+    setCurrentUser(profile);
+  };
+
   // 5b. Equipe cadastra cliente (a conta é criada pela rota serverless) e recarrega a lista
   const handleCreateClient = async (input: NewClientInput) => {
     const r = await createClientAsStaff(clinicId, input);
@@ -595,7 +619,10 @@ function ClinicApp({ userId, clinic }: { userId: string; clinic: ClinicBranding 
             onRetryAgenda={reloadAgenda}
             onBookAppointment={handleBookAppointment}
             onCancelAppointment={handleCancelAppointment}
+            onRescheduleAppointment={handleRescheduleMine}
+            onSaveProfile={handleSaveProfile}
             onExportData={handleExportData}
+            notify={showToast}
           />
         )}
 
