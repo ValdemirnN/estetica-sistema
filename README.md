@@ -101,7 +101,9 @@ Para uma instalação de uma clínica só, use `VITE_DEFAULT_CLINIC_SLUG`.
 
 As migrations ficam em `supabase/migrations` e devem rodar **em ordem** (todas podem ser reexecutadas).
 
-**Opção 1 — SQL Editor (mais rápido para começar):** abra o projeto no [Supabase Dashboard](https://supabase.com/dashboard), vá em *SQL Editor → New query*, cole o conteúdo de cada migration na ordem da lista acima e clique em *Run*.
+**Opção 1 — SQL Editor, de uma vez só (recomendado):** abra o projeto no [Supabase Dashboard](https://supabase.com/dashboard), vá em *SQL Editor → New query*, cole **todo** o conteúdo de [`supabase/supabase_tudo.sql`](supabase/supabase_tudo.sql) (as 9 migrations já na ordem certa) e clique em *Run*. Serve para banco novo e para banco já migrado (pode reexecutar). Se alterar alguma migration, regenere o arquivo com `npm run db:bundle`.
+
+**Opção 1b — SQL Editor, migration por migration:** cole o conteúdo de cada arquivo de `supabase/migrations` na ordem da lista acima.
 
 **Opção 2 — Supabase CLI:**
 
