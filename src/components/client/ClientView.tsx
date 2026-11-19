@@ -10,7 +10,10 @@ import {
   Leave,
   UserProfile
 } from '../../types/clinic';
-import type { BookingInput } from '../../services/api';
+import type { BookingInput, MyProfileInput } from '../../services/api';
+import { downloadIcs } from '../../lib/ics';
+import { RescheduleModal } from './RescheduleModal';
+import { MyDataPanel } from './MyDataPanel';
 import {
   calculateAvailableSlots,
   checkCancellationEligibility,
@@ -39,6 +42,9 @@ import {
   Info,
   CalendarCheck,
   RotateCcw,
+  CalendarClock,
+  CalendarPlus,
+  Repeat,
   LayoutDashboard
 } from 'lucide-react';
 
@@ -57,7 +63,11 @@ interface ClientViewProps {
   /** Retorna o id do agendamento criado, ou null se falhou (o App já mostra o motivo). */
   onBookAppointment: (input: BookingInput) => Promise<string | null>;
   onCancelAppointment: (aptId: string, reason: string) => Promise<boolean>;
+  /** Remarca o próprio agendamento; a antecedência mínima é validada no banco. */
+  onRescheduleAppointment: (aptId: string, startIso: string, professionalId: string) => Promise<boolean>;
+  onSaveProfile: (input: MyProfileInput) => Promise<void>;
   onExportData: () => void;
+  notify: (msg: string) => void;
 }
 
 // O dashboard carrega o recharts: fica em chunk próprio.
@@ -76,7 +86,10 @@ export function ClientView({
   onRetryAgenda,
   onBookAppointment,
   onCancelAppointment,
-  onExportData
+  onRescheduleAppointment,
+  onSaveProfile,
+  onExportData,
+  notify
 }: ClientViewProps) {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'catalog' | 'my-appointments' | 'my-data'>('dashboard');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -110,6 +123,8 @@ export function ClientView({
   // Modal de Cancelamento
   const [cancellingApt, setCancellingApt] = useState<Appointment | null>(null);
   const [cancelReasonInput, setCancelReasonInput] = useState('');
+  // Modal de Remarcação
+  const [reschedulingApt, setReschedulingApt] = useState<Appointment | null>(null);
 
   // O cliente só vê o que dá para agendar: procedimento ativo, de categoria ativa e com profissional ativa vinculada.
   const catalogServices = services.filter(
@@ -139,10 +154,43 @@ export function ClientView({
       })
     : [];
 
-  const handleStartBooking = (service: Service) => {
+  const handleStartBooking = (service: Service, preferredProfessionalId?: string) => {
     setSelectedService(service);
     setSelectedSlot(null);
     setBookingStep(1);
+    // Mantém a profissional do atendimento anterior, se ela ainda realiza o procedimento.
+    const stillValid =
+      !!preferredProfessionalId &&
+      professionals.some((p) => p.id === preferredProfessionalId && p.isActive && p.specialtyServiceIds.includes(service.id));
+    setSelectedProfId(stillValid ? preferredProfessionalId! : 'AUTO_ASSIGN');
+  };
+
+  // Agendar novamente a partir do histórico
+  const handleRebook = (apt: Appointment) => {
+    const service = catalogServices.find((s) => s.id === apt.serviceId);
+    if (!service) return;
+    setActiveTab('catalog');
+    handleStartBooking(service, apt.professionalId);
+  };
+
+  // Adicionar ao calendário (.ics)
+  const handleAddToCalendar = (apt: Appointment) => {
+    const srv = services.find((s) => s.id === apt.serviceId);
+    const prof = professionals.find((p) => p.id === apt.professionalId);
+    downloadIcs(
+      {
+        uid: `${apt.id}@${settings.slug}`,
+        title: `${srv?.name ?? 'Atendimento'} — ${settings.name}`,
+        startIso: apt.startTime,
+        endIso: apt.endTime,
+        location: settings.address || undefined,
+        description: [prof ? `Profissional: ${prof.name}` : '', settings.phone ? `Contato: ${settings.phone}` : '']
+          .filter(Boolean)
+          .join('\n'),
+        reminderMinutes: 24 * 60
+      },
+      `agendamento-${settings.slug}-${apt.startTime.slice(0, 10)}`
+    );
   };
 
   const handleConfirmBooking = async () => {
@@ -663,7 +711,15 @@ export function ClientView({
                 <div className="text-slate-400">Contato: <strong className="text-emerald-400">{currentUser.phone || currentUser.email}</strong></div>
               </div>
 
-              <div className="pt-2">
+              <div className="pt-2 flex flex-wrap items-center justify-center gap-2">
+                {bookedAptId && appointments.some((a) => a.id === bookedAptId) && (
+                  <button
+                    onClick={() => handleAddToCalendar(appointments.find((a) => a.id === bookedAptId)!)}
+                    className="px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold transition-all flex items-center gap-1.5"
+                  >
+                    <CalendarPlus className="w-3.5 h-3.5" /> Adicionar ao calendário
+                  </button>
+                )}
                 <button
                   onClick={() => {
                     setSelectedService(null);
@@ -687,7 +743,7 @@ export function ClientView({
               <CalendarCheck className="w-4 h-4 text-rose-400" /> Histórico e Agendamentos Futuros
             </h2>
             <span className="text-xs text-slate-400">
-              Política: Cancelamento online permitido até {settings.minCancelNoticeHours}h antes
+              Política: Cancelamento e remarcação online permitidos até {settings.minCancelNoticeHours}h antes
             </span>
           </div>
 
@@ -764,15 +820,36 @@ export function ClientView({
                     </div>
 
                     <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 shrink-0">
-                      {apt.status === 'CONFIRMED' && (
+                      {(apt.status === 'CONFIRMED' || apt.status === 'PENDING') && (
                         <>
+                          {new Date(apt.endTime) > new Date() && (
+                            <button
+                              onClick={() => handleAddToCalendar(apt)}
+                              className="px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-all border bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700"
+                            >
+                              <CalendarPlus className="w-3.5 h-3.5" />
+                              Adicionar ao calendário
+                            </button>
+                          )}
+                          <button
+                            onClick={() => (eligibility.canCancel ? setReschedulingApt(apt) : notify(eligibility.message))}
+                            className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-all border ${
+                              eligibility.canCancel
+                                ? 'bg-slate-800 text-white border-slate-700 hover:bg-slate-700'
+                                : 'bg-slate-900 text-slate-500 border-slate-800 cursor-not-allowed'
+                            }`}
+                            title={eligibility.message}
+                          >
+                            <CalendarClock className="w-3.5 h-3.5" />
+                            Remarcar
+                          </button>
                           <button
                             onClick={() => {
                               if (eligibility.canCancel) {
                                 setCancellingApt(apt);
                                 setCancelReasonInput('');
                               } else {
-                                alert(eligibility.message);
+                                notify(eligibility.message);
                               }
                             }}
                             className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-all border ${
@@ -783,10 +860,21 @@ export function ClientView({
                             title={eligibility.message}
                           >
                             <RotateCcw className="w-3.5 h-3.5" />
-                            Cancelar / Remarcar
+                            Cancelar
                           </button>
                         </>
                       )}
+
+                      {(apt.status === 'COMPLETED' || apt.status === 'CANCELLED' || apt.status === 'NO_SHOW') &&
+                        catalogServices.some((s) => s.id === apt.serviceId) && (
+                          <button
+                            onClick={() => handleRebook(apt)}
+                            className="px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-all border bg-rose-600/10 text-rose-300 border-rose-500/30 hover:bg-rose-600/20"
+                          >
+                            <Repeat className="w-3.5 h-3.5" />
+                            Agendar novamente
+                          </button>
+                        )}
 
                       <div className="text-right pl-2 hidden md:block">
                         <span className="text-xs font-bold text-white">
@@ -807,32 +895,27 @@ export function ClientView({
 
       {/* ================= ABA: MEUS DADOS & PRIVACIDADE ================= */}
       {activeTab === 'my-data' && (
-        <div className="space-y-5 max-w-3xl mx-auto">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h3 className="text-base font-bold text-white flex items-center gap-2">
-                  <ShieldCheck className="w-5 h-5 text-rose-400" /> Meus Dados & Privacidade
-                </h3>
-                <p className="text-xs text-slate-400 mt-1">
-                  Seus dados cadastrais são usados apenas para agendamentos e avisos, conforme a LGPD.
-                </p>
-              </div>
-              <button
-                onClick={onExportData}
-                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 flex items-center gap-1.5 transition-colors shrink-0"
-              >
-                <Download className="w-3.5 h-3.5" />
-                Exportar Dados (JSON)
-              </button>
-            </div>
-            <div className="space-y-2 bg-slate-950 p-4 rounded-xl border border-slate-800 text-xs">
-              <p className="text-slate-300"><span className="text-slate-500">Nome:</span> {currentUser.fullName}</p>
-              <p className="text-slate-300"><span className="text-slate-500">E-mail:</span> {currentUser.email}</p>
-              <p className="text-slate-300"><span className="text-slate-500">Telefone:</span> {currentUser.phone || '—'}</p>
-            </div>
-          </div>
-        </div>
+        <MyDataPanel
+          currentUser={currentUser}
+          clinicId={settings.id}
+          onExportData={onExportData}
+          onSaveProfile={onSaveProfile}
+          notify={notify}
+        />
+      )}
+
+      {/* Modal de Remarcação */}
+      {reschedulingApt && (
+        <RescheduleModal
+          appointment={reschedulingApt}
+          service={services.find((x) => x.id === reschedulingApt.serviceId)}
+          professionals={professionals}
+          busyBlocks={busyBlocks}
+          leaves={leaves}
+          settings={settings}
+          onClose={() => setReschedulingApt(null)}
+          onConfirm={(startIso, professionalId) => onRescheduleAppointment(reschedulingApt.id, startIso, professionalId)}
+        />
       )}
 
       {/* Modal de Confirmação de Cancelamento com Validação */}
