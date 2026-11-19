@@ -143,6 +143,8 @@ export interface ClinicBranding {
   whatsapp: string;
   address: string;
   isActive: boolean;
+  /** Link de agendamento aberto aos clientes. Falso = só a equipe entra (a clínica ainda está sendo configurada). */
+  bookingPublished: boolean;
 }
 
 /** Marca + regras de negócio da clínica (o dono edita tudo isto no painel). */
@@ -152,6 +154,8 @@ export interface ClinicSettings extends ClinicBranding {
   slotStepMinutes: number; // De quantos em quantos minutos a grade de horários é oferecida
   autoAssignStrategy: 'ROUND_ROBIN' | 'LEAST_BUSY';
   workingDays: number[];
+  /** Jornada padrão para novos profissionais (carregada pelo modelo). Sem valor = padrão do app. */
+  defaultWorkingHours?: WorkingHours[];
 }
 
 /** Pessoa da equipe (ou convite pendente) mostrada na tela "Equipe e acessos". */
@@ -176,6 +180,7 @@ export interface PlatformClinic {
   name: string;
   primaryColor: string;
   isActive: boolean;
+  bookingPublished: boolean;
   createdAt: string;
   members: number;
   appointments30d: number;

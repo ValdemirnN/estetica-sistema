@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { AlertTriangle, Clock, EyeOff, FolderPlus, Loader2, Pencil, Plus, Tag, Trash2, Users } from 'lucide-react';
+import { AlertTriangle, Clock, EyeOff, FolderPlus, Loader2, Pencil, Plus, Tag, Trash2, Users, Wand2 } from 'lucide-react';
 import { Professional, Service, ServiceCategory } from '../../types/clinic';
-import { CategoryInput, ServiceInput, deleteCategory, deleteService, saveCategory, saveService } from '../../services/api';
+import { CategoryInput, ServiceInput, deleteCategory, deleteService, loadClinicTemplate, saveCategory, saveService } from '../../services/api';
 import { formatBRL } from '../../lib/format';
 import { Field, Modal, Toggle, ImageField, errMsg, ghostBtn, inputClass, primaryBtn } from './ui';
 
@@ -37,6 +37,24 @@ export function ServicesManager({ clinicId, categories, services, professionals,
   const [error, setError] = useState<string | null>(null);
 
   const activeProfessionals = professionals.filter((p) => p.isActive);
+
+  const applyTemplate = async () => {
+    setError(null);
+    setBusy(true);
+    try {
+      const r = await loadClinicTemplate(clinicId);
+      await onChanged();
+      notify(
+        r.servicesAdded > 0
+          ? `Modelo carregado: ${r.servicesAdded} procedimentos de exemplo (inativos). Revise e ative.`
+          : 'O modelo já estava carregado.'
+      );
+    } catch (e) {
+      setError(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const openNewService = (categoryId?: string) => {
     const first = categoryId ?? categories.find((c) => c.isActive)?.id ?? categories[0]?.id ?? '';
@@ -183,6 +201,24 @@ export function ServicesManager({ clinicId, categories, services, professionals,
               Cadastrar profissionais
             </button>
           </span>
+        </div>
+      )}
+
+      {services.length === 0 && (
+        <div className="flex flex-wrap items-center gap-3 text-xs bg-slate-900 border border-dashed border-slate-700 rounded-2xl p-4">
+          <Wand2 className="w-4 h-4 text-rose-300 shrink-0" />
+          <p className="text-slate-300 mr-auto min-w-[14rem]">
+            Seu catálogo está vazio. <strong>Carregue o modelo</strong> para começar com procedimentos de exemplo (ficam <strong>inativos</strong>: edite
+            preço e duração e ative os que você realiza) e horários padrão.
+          </p>
+          <button onClick={applyTemplate} disabled={busy} className={ghostBtn}>
+            {busy && <Loader2 className="w-3.5 h-3.5 animate-spin" />} Carregar modelo
+          </button>
+          {error && !serviceForm && !categoryForm && (
+            <div className="w-full">
+              <ErrorBox text={error} />
+            </div>
+          )}
         </div>
       )}
 

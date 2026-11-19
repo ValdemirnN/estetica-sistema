@@ -35,6 +35,7 @@ import {
   UserRole
 } from './types/clinic';
 import { AuthScreen } from './components/auth/AuthScreen';
+import { BookingClosedNotice } from './components/BookingClosedNotice';
 import { FirstAccessPasswordModal } from './components/auth/FirstAccessPasswordModal';
 import type { SeriesResult } from './components/clinic/NewAppointmentModal';
 import { ViewFallback } from './components/ViewFallback';
@@ -212,6 +213,8 @@ function ClinicApp({ userId, clinic }: { userId: string; clinic: ClinicBranding 
   const [agendaStatus, setAgendaStatus] = useState<AgendaStatus>('ready');
 
   const [loadError, setLoadError] = useState<string | null>(null);
+  // Cliente que tentou entrar numa clínica cujo link ainda não foi publicado.
+  const [closedForClient, setClosedForClient] = useState(false);
   const [mainTab, setMainTab] = useState<MainTab>('client-app');
   const [isRefreshingNotifs, setIsRefreshingNotifs] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -252,7 +255,9 @@ function ClinicApp({ userId, clinic }: { userId: string; clinic: ClinicBranding 
       setClients(clientList);
       setMainTab((prev) => (staff && prev === 'client-app' ? 'admin-panel' : prev));
     } catch (e) {
-      setLoadError(errMsg(e));
+      // O banco recusa a entrada de novos clientes enquanto o link não foi publicado.
+      if (/ainda não abriu o agendamento/i.test(errMsg(e))) setClosedForClient(true);
+      else setLoadError(errMsg(e));
     }
   }, [userId, clinicId]);
 
@@ -295,6 +300,14 @@ function ClinicApp({ userId, clinic }: { userId: string; clinic: ClinicBranding 
   const handleSignOut = async () => {
     await signOut(); // AuthGate volta para o login
   };
+
+  if (closedForClient) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-6 font-sans">
+        <BookingClosedNotice clinic={clinic} onSignOut={handleSignOut} />
+      </div>
+    );
+  }
 
   if (loadError) {
     return (
@@ -564,7 +577,11 @@ function ClinicApp({ userId, clinic }: { userId: string; clinic: ClinicBranding 
       {/* Main View Area */}
       <main className="flex-1 max-w-7xl mx-auto px-4 py-6 w-full">
         <Suspense fallback={<ViewFallback />}>
-        {mainTab === 'client-app' && !isStaff && (
+        {mainTab === 'client-app' && !isStaff && !settings.bookingPublished && (
+          <BookingClosedNotice clinic={settings} />
+        )}
+
+        {mainTab === 'client-app' && !isStaff && settings.bookingPublished && (
           <ClientView
             currentUser={currentUser}
             categories={categories}

@@ -15,6 +15,8 @@ import { ErrorBox } from './ServicesManager';
 
 interface Props {
   clinicId: string;
+  /** Jornada padrão da clínica (modelo). Sem valor, usa seg–sex 09–18 com almoço. */
+  defaultHours?: WorkingHours[];
   professionals: Professional[];
   services: Service[];
   leaves: Leave[];
@@ -45,7 +47,7 @@ const summarize = (hours: WorkingHours[]) => {
   }).join(' · ');
 };
 
-const emptyPro = (colorIdx: number): ProfessionalInput => ({
+const emptyPro = (colorIdx: number, defaultHours?: WorkingHours[]): ProfessionalInput => ({
   name: '',
   title: '',
   registryNumber: '',
@@ -56,13 +58,13 @@ const emptyPro = (colorIdx: number): ProfessionalInput => ({
   isAvailableForAutoAssign: true,
   isActive: true,
   serviceIds: [],
-  workingHours: defaultWorkingHours()
+  workingHours: defaultWorkingHours(defaultHours)
 });
 
 /** datetime-local (horário de Brasília) -> ISO UTC */
 const localToIso = (v: string) => new Date(`${v}:00-03:00`).toISOString();
 
-export function ProfessionalsManager({ clinicId, professionals, services, leaves, onChanged, notify }: Props) {
+export function ProfessionalsManager({ clinicId, defaultHours, professionals, services, leaves, onChanged, notify }: Props) {
   const [form, setForm] = useState<ProfessionalInput | null>(null);
   const [tab, setTab] = useState<Tab>('dados');
   const [busy, setBusy] = useState(false);
@@ -74,7 +76,7 @@ export function ProfessionalsManager({ clinicId, professionals, services, leaves
   const activeServices = services.filter((s) => s.isActive);
 
   const openNew = () => {
-    const f = emptyPro(professionals.length);
+    const f = emptyPro(professionals.length, defaultHours);
     f.serviceIds = activeServices.map((s) => s.id);
     setForm(f);
     setTab('dados');

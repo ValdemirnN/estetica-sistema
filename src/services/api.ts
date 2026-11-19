@@ -94,7 +94,9 @@ function mapBranding(r: any): ClinicBranding {
     phone: r.phone ?? '',
     whatsapp: r.whatsapp ?? '',
     address: r.address ?? '',
-    isActive: r.is_active
+    isActive: r.is_active,
+    // Sem a coluna (migration 6 não aplicada), não trancamos clínicas que já funcionavam.
+    bookingPublished: r.booking_published ?? true
   };
 }
 
@@ -271,8 +273,28 @@ function mapSettings(r: any): ClinicSettings {
     defaultBufferMinutes: r.default_buffer_minutes,
     slotStepMinutes: r.slot_step_minutes ?? 15,
     autoAssignStrategy: r.auto_assign_strategy,
-    workingDays: r.working_days
+    workingDays: r.working_days,
+    defaultWorkingHours: parseDefaultHours(r.default_working_hours)
   };
+}
+
+/** Jornada padrão gravada na clínica (jsonb) -> formato do app. Valor inválido = ignora (usa o padrão do app). */
+function parseDefaultHours(raw: unknown): WorkingHours[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  const out: WorkingHours[] = [];
+  for (const h of raw as any[]) {
+    const day = DAY_FROM_DB[h?.day_of_week];
+    if (day === undefined || !h.start_time || !h.end_time) return undefined;
+    out.push({
+      dayOfWeek: day,
+      startTime: hhmm(h.start_time)!,
+      endTime: hhmm(h.end_time)!,
+      breakStartTime: hhmm(h.break_start_time),
+      breakEndTime: hhmm(h.break_end_time),
+      isActive: !!h.is_active
+    });
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -503,7 +525,13 @@ const DAY_TO_DB: Record<number, string> = {
 };
 
 /** Jornada inicial de quem acabou de ser cadastrada: seg–sex 09:00–18:00 com almoço, sábado fechado. */
-export function defaultWorkingHours(): WorkingHours[] {
+export function defaultWorkingHours(clinicDefault?: WorkingHours[]): WorkingHours[] {
+  // Jornada padrão da clínica (carregada pelo modelo): sempre os 7 dias, na ordem dom-sáb.
+  if (clinicDefault && clinicDefault.length === 7) {
+    return ([0, 1, 2, 3, 4, 5, 6] as DayOfWeek[]).map(
+      (d) => clinicDefault.find((w) => w.dayOfWeek === d) ?? { dayOfWeek: d, startTime: '09:00', endTime: '18:00', isActive: false }
+    );
+  }
   return ([0, 1, 2, 3, 4, 5, 6] as DayOfWeek[]).map((d) => ({
     dayOfWeek: d,
     startTime: '09:00',
@@ -676,6 +704,37 @@ export async function revokeInvite(inviteId: string): Promise<void> {
   if (error) fail(error, 'Convite');
 }
 
+// --- Onboarding: checklist, modelo e publicação do link ---
+
+export interface TemplateResult {
+  categoriesAdded: number;
+  servicesAdded: number;
+  professionalsWithNewHours: number;
+}
+
+/** Carrega categorias e procedimentos de exemplo (INATIVOS) e a jornada padrão. Não duplica nem sobrescreve. */
+export async function loadClinicTemplate(clinicId: string): Promise<TemplateResult> {
+  const { data, error } = await supabase.rpc('load_clinic_template', { p_clinic_id: clinicId });
+  if (error) fail(error, 'Modelo');
+  const d = data as any;
+  return {
+    categoriesAdded: Number(d?.categories_added ?? 0),
+    servicesAdded: Number(d?.services_added ?? 0),
+    professionalsWithNewHours: Number(d?.professionals_with_new_hours ?? 0)
+  };
+}
+
+/** Abre (true) ou pausa (false) o link de agendamento. Abrir só funciona se o banco confirmar os requisitos. */
+export async function setBookingPublished(clinicId: string, published: boolean): Promise<void> {
+  const { data, error } = await supabase
+    .from('clinics')
+    .update({ booking_published: published })
+    .eq('id', clinicId)
+    .select('id');
+  if (error) fail(error, 'Link de agendamento');
+  if (!data?.length) throw new ApiError(NOT_ALLOWED);
+}
+
 // --- Plataforma (dono do SaaS) ---
 
 export async function platformListClinics(): Promise<PlatformClinic[]> {
@@ -688,6 +747,7 @@ export async function platformListClinics(): Promise<PlatformClinic[]> {
       name: c.name,
       primaryColor: c.primary_color,
       isActive: c.is_active,
+      bookingPublished: c.booking_published ?? true,
       createdAt: c.created_at,
       members: Number(c.members),
       appointments30d: Number(c.appointments_30d),
@@ -703,13 +763,16 @@ export async function platformCreateClinic(params: {
   ownerEmail: string;
   primaryColor: string;
   phone: string;
+  /** Cria também procedimentos de exemplo (inativos) e a jornada padrão. */
+  loadTemplate?: boolean;
 }): Promise<void> {
   const { error } = await supabase.rpc('create_clinic', {
     p_slug: params.slug,
     p_name: params.name,
     p_owner_email: params.ownerEmail,
     p_primary_color: params.primaryColor,
-    p_phone: params.phone
+    p_phone: params.phone,
+    p_load_template: params.loadTemplate ?? false
   });
   if (error) fail(error, 'Nova clínica');
 }

@@ -11,6 +11,8 @@ interface AuthScreenProps {
 }
 
 export function AuthScreen({ clinic, platform }: AuthScreenProps) {
+  // Link ainda não publicado: só a equipe (dono, recepção) entra; cadastro de cliente fica fechado.
+  const signupClosed = !!clinic && !clinic.bookingPublished;
   const [mode, setMode] = useState<'login' | 'signup'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -85,7 +87,12 @@ export function AuthScreen({ clinic, platform }: AuthScreenProps) {
           </div>
         ) : (
           <>
-            <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800 mb-5 text-xs font-semibold">
+            {signupClosed && (
+              <p className="text-[11px] text-amber-200 bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 mb-4 leading-relaxed">
+                O agendamento online desta clínica abre em breve. Por enquanto, apenas a equipe pode entrar.
+              </p>
+            )}
+            <div className={`flex bg-slate-950 p-1 rounded-xl border border-slate-800 mb-5 text-xs font-semibold ${signupClosed ? 'hidden' : ''}`}>
               {(['login', 'signup'] as const).map((m) => (
                 <button
                   key={m}

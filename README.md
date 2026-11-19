@@ -37,6 +37,7 @@ Para uma instalação de uma clínica só, use `VITE_DEFAULT_CLINIC_SLUG`.
    3. `supabase/migrations/20261117000100_multi_clinic.sql` — multi-clínica. Se você já tinha a clínica única funcionando, ela vira a clínica `aesthetiq`, com todos os dados e papéis preservados. Também cria o bucket de imagens `clinic-assets`.
    4. `supabase/migrations/20261118000100_sem_prontuario_agenda_clientes.sql` — remove prontuário/anamnese (LGPD) e cria a agenda da equipe e o cadastro de clientes. **Apaga** as tabelas de anamnese: exporte antes se precisar.
    5. `supabase/migrations/20261119000100_intervalo_retorno.sql` — campo "retorno recomendado (dias)" em cada procedimento, usado no cronograma preventivo do cliente.
+   6. `supabase/migrations/20261120000100_onboarding_dono.sql` — **Fase 3, onboarding do dono**: "carregar modelo" (categorias, procedimentos de exemplo **inativos** e horários padrão), checklist "Primeiros passos" e **link de agendamento fechado até o dono publicar**. Clínicas que já existiam continuam abertas; as novas nascem fechadas.
 2. **Variáveis:** copie `.env.example` para `.env` e preencha `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY` (chave **anon**, nunca a `service_role`).
 3. **Rodar:** `npm install && npm run dev`.
 4. **Você, dono da plataforma** — crie uma conta pelo app e, no SQL Editor:
@@ -46,10 +47,12 @@ Para uma instalação de uma clínica só, use `VITE_DEFAULT_CLINIC_SLUG`.
    Depois abra `/?plataforma=1` para criar clínicas.
 5. **Criar uma clínica nova** (pelo painel da plataforma, ou por SQL):
    ```sql
-   select public.create_clinic('clinica-bella', 'Clínica Bella', 'dona@bella.com', '#7c3aed', '(11) 99999-0000');
+   select public.create_clinic('clinica-bella', 'Clínica Bella', 'dona@bella.com', '#7c3aed', '(11) 99999-0000', true);
    ```
+   O último argumento (`true`) carrega o **modelo**: procedimentos de exemplo (inativos, o dono edita preço/duração e ativa) e a jornada padrão (seg–sex 09–18, almoço 12–13). No painel da plataforma é a caixa "Carregar modelo" (marcada por padrão). O dono também pode carregar o modelo depois, com o botão no catálogo vazio (`load_clinic_template`, idempotente: não duplica nem sobrescreve).
+
    A dona cria a conta com esse e-mail, entra em `…?clinica=clinica-bella` e já cai como **administradora**.
-   Ela então segue o checklist "Primeiros passos" do painel: profissionais → horários → procedimentos → marca.
+   Ela então segue o checklist "Primeiros passos" do painel. **O link de agendamento nasce fechado**: clientes veem "agendamento em breve" e não conseguem se cadastrar nem agendar. O botão **Publicar link de agendamento** só habilita com **ao menos 1 profissional ativo, 1 horário de atendimento ativo e 1 procedimento ativo** — e o próprio banco recusa a publicação se isso não for verdade (não é só o botão). O dono pode **pausar** o link a qualquer momento; a equipe continua usando o painel e agendando normalmente.
 6. **Auth:** em produção mantenha *Confirm email* **ligado** (Authentication → Providers → Email): convites de dono/equipe só valem para e-mail confirmado. Adicione as URLs das clínicas em *Authentication → URL Configuration → Redirect URLs* (ou o padrão coringa do seu domínio).
 
 ### Como funciona a segurança
@@ -118,4 +121,4 @@ Em `npm run dev` as rotas `/api` não existem; use `vercel dev` para testá-las.
 
 **Sobreposição:** o banco não aceita dois atendimentos sobrepostos da mesma profissional (`EXCLUDE`), então não há “encaixe” sobreposto. A duração segue a do procedimento.
 
-**Testes do banco:** `supabase/tests/sem_prontuario_agenda_test.sql` (rode depois das migrations, como descrito em `supabase/tests/README.md`).
+**Testes do banco:** `supabase/tests/onboarding_dono_test.sql` (Fase 3) e `supabase/tests/sem_prontuario_agenda_test.sql` (rode depois das migrations, como descrito em `supabase/tests/README.md`).

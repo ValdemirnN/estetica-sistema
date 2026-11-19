@@ -16,6 +16,7 @@ import { ViewFallback } from '../ViewFallback';
 import { ServicesManager } from './ServicesManager';
 import { ProfessionalsManager } from './ProfessionalsManager';
 import { ClinicSettingsPanel } from './ClinicSettingsPanel';
+import { SetupChecklist } from './SetupChecklist';
 import { StaffScheduler } from '../clinic/StaffScheduler';
 import { ClientsList } from '../clinic/ClientsList';
 import { NewClientModal } from '../clinic/NewClientModal';
@@ -24,7 +25,6 @@ import {
   Calendar as CalendarIcon,
   Users,
   Settings,
-  CheckCircle2,
   UserRound,
   Tag,
   BarChart3
@@ -92,47 +92,19 @@ export function AdminView({
     ] as { id: AdminTab; label: string; icon: React.ReactNode; adminOnly?: boolean }[]
   ).filter((t) => isAdmin || !t.adminOnly);
 
-  // Passos para a clínica ficar pronta para receber agendamentos (só o dono vê)
-  const setupSteps = [
-    { done: professionals.some((p) => p.isActive), label: 'Cadastre quem atende', tab: 'professionals' as AdminTab },
-    { done: professionals.some((p) => p.isActive && p.workingHours.some((w) => w.isActive)), label: 'Defina os dias e horários de atendimento', tab: 'professionals' as AdminTab },
-    { done: services.some((s) => s.isActive), label: 'Cadastre seus procedimentos e preços', tab: 'services' as AdminTab },
-    {
-      done: services.some((s) => s.isActive && professionals.some((p) => p.isActive && p.specialtyServiceIds.includes(s.id))),
-      label: 'Vincule os procedimentos a quem realiza',
-      tab: 'services' as AdminTab
-    },
-    { done: !!settings.logoUrl || settings.primaryColor.toLowerCase() !== '#e11d48', label: 'Personalize logo, cores e textos', tab: 'settings' as AdminTab }
-  ];
-  const nextStep = setupSteps.find((st) => !st.done);
-
   return (
     <div className="space-y-6">
-      {isAdmin && nextStep && (
-        <div className="bg-slate-900 border border-rose-500/30 rounded-2xl p-4 space-y-3">
-          <div className="flex items-center justify-between gap-3">
-            <h3 className="text-sm font-bold text-white">Primeiros passos para receber agendamentos</h3>
-            <span className="text-[11px] text-slate-400">
-              {setupSteps.filter((x) => x.done).length}/{setupSteps.length} concluídos
-            </span>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {setupSteps.map((st) => (
-              <button
-                key={st.label}
-                onClick={() => setActiveTab(st.tab)}
-                className={`flex items-center gap-2 text-left text-xs px-3 py-2 rounded-xl border transition-colors ${
-                  st.done
-                    ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-300'
-                    : 'border-slate-700 bg-slate-950 text-slate-200 hover:border-rose-500/50'
-                }`}
-              >
-                {st.done ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <span className="w-4 h-4 rounded-full border border-slate-600 shrink-0" />}
-                {st.label}
-              </button>
-            ))}
-          </div>
-        </div>
+      {/* Primeiros passos: bloqueia a publicação do link até haver profissional, horário e procedimento ativos */}
+      {isAdmin && (
+        <SetupChecklist
+          clinicId={clinicId}
+          settings={settings}
+          professionals={professionals}
+          services={services}
+          goTo={setActiveTab}
+          onChanged={onCatalogChanged}
+          notify={notify}
+        />
       )}
 
       {/* Top Admin Sub-bar */}
@@ -210,6 +182,7 @@ export function AdminView({
       {activeTab === 'professionals' && isAdmin && (
         <ProfessionalsManager
           clinicId={clinicId}
+          defaultHours={settings.defaultWorkingHours}
           professionals={professionals}
           services={services}
           leaves={leaves}

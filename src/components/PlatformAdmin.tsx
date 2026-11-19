@@ -22,7 +22,8 @@ export function PlatformAdmin({ allowed, onBack }: { allowed: boolean; onBack?: 
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [form, setForm] = useState({ name: '', slug: '', ownerEmail: '', phone: '', primaryColor: COLOR_PRESETS[0].hex });
+  const emptyForm = () => ({ name: '', slug: '', ownerEmail: '', phone: '', primaryColor: COLOR_PRESETS[0].hex, loadTemplate: true });
+  const [form, setForm] = useState(emptyForm);
   const [slugTouched, setSlugTouched] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
 
@@ -63,7 +64,7 @@ export function PlatformAdmin({ allowed, onBack }: { allowed: boolean; onBack?: 
     try {
       await platformCreateClinic({ ...form, slug: form.slug.trim() });
       setCreating(false);
-      setForm({ name: '', slug: '', ownerEmail: '', phone: '', primaryColor: COLOR_PRESETS[0].hex });
+      setForm(emptyForm());
       setSlugTouched(false);
       await load();
     } catch (e) {
@@ -137,6 +138,11 @@ export function PlatformAdmin({ allowed, onBack }: { allowed: boolean; onBack?: 
                   <p className="font-bold text-white text-sm flex items-center gap-2">
                     {c.name}
                     {!c.isActive && <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30">Suspensa</span>}
+                    {c.isActive && !c.bookingPublished && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-700/60 text-slate-300 border border-slate-600" title="O dono ainda não publicou o link de agendamento">
+                        Em configuração
+                      </span>
+                    )}
                   </p>
                   <p className="text-[11px] text-slate-400 font-mono">{buildClinicUrl(c.slug)}</p>
                   <p className="text-[11px] text-slate-500 mt-0.5">
@@ -167,7 +173,7 @@ export function PlatformAdmin({ allowed, onBack }: { allowed: boolean; onBack?: 
       {creating && (
         <Modal
           title="Nova clínica"
-          subtitle="Cria o espaço da clínica com categorias iniciais. O dono personaliza o resto."
+          subtitle="Cria o espaço da clínica com categorias iniciais. O dono personaliza o resto e publica o link quando estiver pronto."
           onClose={() => !busy && setCreating(false)}
           footer={
             <>
@@ -203,6 +209,18 @@ export function PlatformAdmin({ allowed, onBack }: { allowed: boolean; onBack?: 
           <Field label="Telefone / WhatsApp (opcional)">
             <input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className={inputClass} />
           </Field>
+          <label className="flex items-start gap-2.5 text-xs bg-slate-950 border border-slate-800 rounded-xl p-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={form.loadTemplate}
+              onChange={(e) => setForm({ ...form, loadTemplate: e.target.checked })}
+              className="mt-0.5 accent-rose-500"
+            />
+            <span className="text-slate-300 leading-relaxed">
+              <strong className="text-white">Carregar modelo</strong>: procedimentos de exemplo (ficam inativos, o dono edita e ativa) e horários padrão
+              de segunda a sexta. O link de agendamento nasce fechado e só abre quando o dono concluir os primeiros passos.
+            </span>
+          </label>
           <div>
             <span className="text-xs text-slate-300 font-semibold block mb-1.5">Cor inicial</span>
             <div className="flex flex-wrap gap-2">
